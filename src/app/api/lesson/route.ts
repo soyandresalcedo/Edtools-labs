@@ -1,4 +1,5 @@
 import { anthropic, MODEL } from "@/lib/anthropic";
+import { runDemoMode } from "@/lib/demoMode";
 import { ToolInputs, type ToolName, TOOLS } from "@/lib/tools";
 import { SYSTEM_PROMPT } from "@/prompts/system";
 
@@ -6,6 +7,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 type Emit = (event: string, data: unknown) => void;
+
+const isDemoMode = () => process.env.DEMO_MODE === "1";
 
 export async function POST(req: Request) {
   const body = (await req.json().catch(() => null)) as null | { question?: unknown };
@@ -22,6 +25,12 @@ export async function POST(req: Request) {
       };
 
       try {
+        if (isDemoMode()) {
+          await runDemoMode(emit, question);
+          controller.close();
+          return;
+        }
+
         if (!process.env.ANTHROPIC_API_KEY) {
           emit("error", {
             message:
