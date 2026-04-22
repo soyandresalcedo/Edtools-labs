@@ -14,6 +14,13 @@ export const LineStyle = z.enum(["solid", "dashed"]);
 export const ToolInputs = {
   clear_canvas: z.object({}).strict(),
 
+  /** Speech variant: one short caption before each 1–3 drawing steps (syncs with diagrams; Day 5 = TTS). */
+  speak: z
+    .object({
+      text: z.string().min(10).max(280),
+    })
+    .strict(),
+
   draw_circle: z
     .object({
       x: z.number().int(),
@@ -68,6 +75,22 @@ export const TOOLS: Tool[] = [
     name: "clear_canvas",
     description: "Clear the canvas. Call at the very start of every new lesson.",
     input_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "speak",
+    description:
+      "Say ONE short sentence in Latin American Spanish (10–280 chars). Use BEFORE each group of 1–3 drawing tools to preview or summarize what the student will see next. Never use for long prose—only step captions. Alternate speak and draw throughout the lesson.",
+    input_schema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description:
+            "Single short sentence, Latin American Spanish, 10–280 characters. No LaTeX.",
+        },
+      },
+      required: ["text"],
+    },
   },
   {
     name: "draw_circle",

@@ -23,28 +23,48 @@ export function shouldUseMruDemo(question: string): boolean {
   return false;
 }
 
-async function streamNarration(emit: Emit, text: string) {
-  const chunks = text.match(/.{1,36}(\s|$)/g) ?? [text];
-  for (const chunk of chunks) {
-    emit("narration_delta", { text: chunk });
-    await sleep(55);
-  }
-}
-
-/** Escena 1: velocidad vs aceleración (pelota en el piso). */
+/** Escena 1: velocidad vs aceleración (pelota en el piso). Speech Variant intercalado. */
 export async function runVelocityVsAccelerationDemo(emit: Emit) {
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Te muestro en el tablero la diferencia entre velocidad y aceleración con una pelota en el suelo.",
+    },
+  });
+  await sleep(400);
   emit("tool_call", { name: "clear_canvas", input: {} });
   await sleep(350);
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Primero dibujo el piso como línea de referencia para que tengamos dónde apoyar la pelota.",
+    },
+  });
+  await sleep(400);
   emit("tool_call", {
     name: "draw_line",
     input: { from: [80, 520], to: [720, 520], style: "solid" },
   });
   await sleep(350);
   emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Aquí va la pelota: la usamos como partícula para no distraernos con la forma.",
+    },
+  });
+  await sleep(400);
+  emit("tool_call", {
     name: "draw_circle",
     input: { x: 200, y: 480, r: 18, label: "pelota", color: "#ef4444" },
   });
   await sleep(350);
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "La flecha azul es la velocidad: indica hacia dónde se mueve y qué tan rápido va en esa dirección.",
+    },
+  });
+  await sleep(450);
   emit("tool_call", {
     name: "draw_arrow",
     input: {
@@ -56,6 +76,13 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   });
   await sleep(350);
   emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "La flecha roja es la aceleración: nos dice si esa velocidad se está aumentando, disminuyendo o girando.",
+    },
+  });
+  await sleep(450);
+  emit("tool_call", {
     name: "draw_arrow",
     input: {
       from: [200, 480],
@@ -66,6 +93,13 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   });
   await sleep(350);
   emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Arriba dejo un título corto para que recuerdes el código de colores del tablero.",
+    },
+  });
+  await sleep(400);
+  emit("tool_call", {
     name: "draw_text",
     input: {
       x: 420,
@@ -74,37 +108,72 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
       size: 20,
     },
   });
-
-  await streamNarration(
-    emit,
-    "Fíjate: la flecha azul es la velocidad (hacia dónde se mueve) y la roja es la aceleración (qué tanto cambia esa velocidad). Si la azul se hace más larga, vas más rápido. ¿Qué crees que pasa si la flecha roja apunta al lado contrario?"
-  );
+  await sleep(350);
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Si la flecha roja apuntara al lado contrario de la azul, ¿qué le estaría pasando al movimiento de la pelota?",
+    },
+  });
 }
 
-/** Escena 2: MRU — ejes t y x, gráfica x(t) recta, auto con v constante. */
+/** Escena 2: MRU — ejes t y x, gráfica x(t), auto con v constante. Speech Variant intercalado. */
 export async function runMruGraphDemo(emit: Emit) {
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "En MRU la velocidad es constante; vamos a verlo en el piso y en una gráfica posición contra tiempo.",
+    },
+  });
+  await sleep(450);
   emit("tool_call", { name: "clear_canvas", input: {} });
   await sleep(350);
 
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Primero el título para saber que la pendiente de x contra t será constante en este caso.",
+    },
+  });
+  await sleep(400);
   emit("tool_call", {
     name: "draw_text",
     input: { x: 60, y: 60, text: "MRU: velocidad constante → x(t) es una línea recta", size: 18 },
   });
   await sleep(300);
 
-  // Piso / referencia
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Abajo dibujo el camino recto como referencia del movimiento en una sola dimensión.",
+    },
+  });
+  await sleep(400);
   emit("tool_call", {
     name: "draw_line",
     input: { from: [80, 500], to: [720, 500], style: "solid" },
   });
   await sleep(250);
 
-  // “Auto”
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Este rectángulo representa un auto que avanza siempre al mismo ritmo, sin frenar ni acelerar.",
+    },
+  });
+  await sleep(450);
   emit("tool_call", {
     name: "draw_rect",
     input: { x: 140, y: 456, w: 56, h: 28, label: "auto" },
   });
   await sleep(250);
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "La flecha azul marca la velocidad constante hacia la derecha, como en un carril sin tráfico.",
+    },
+  });
+  await sleep(450);
   emit("tool_call", {
     name: "draw_arrow",
     input: {
@@ -116,16 +185,28 @@ export async function runMruGraphDemo(emit: Emit) {
   });
   await sleep(350);
 
-  // Panel de gráfica: etiqueta
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "A la derecha abro el panel de la gráfica: tiempo en horizontal y posición en vertical.",
+    },
+  });
+  await sleep(450);
   emit("tool_call", {
     name: "draw_text",
     input: { x: 400, y: 200, text: "Gráfica posición vs tiempo", size: 16 },
   });
   await sleep(200);
 
-  // Eje t (horizontal), eje x (vertical) — origen abajo-izquierda del panel
   const Ox = 420;
   const Oy = 420;
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Dibujo el eje del tiempo t y el eje de posición x con origen en la esquina del gráfico.",
+    },
+  });
+  await sleep(450);
   emit("tool_call", {
     name: "draw_line",
     input: { from: [Ox, Oy], to: [640, Oy], style: "solid" },
@@ -137,6 +218,13 @@ export async function runMruGraphDemo(emit: Emit) {
   });
   await sleep(200);
   emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Etiqueto t y x para que sepas qué eje miras cuando hablemos de pendiente.",
+    },
+  });
+  await sleep(400);
+  emit("tool_call", {
     name: "draw_text",
     input: { x: 648, y: 412, text: "t", size: 18 },
   });
@@ -147,7 +235,13 @@ export async function runMruGraphDemo(emit: Emit) {
   });
   await sleep(200);
 
-  // Curva x(t): varios segmentos (pendiente constante = MRU)
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Ahora trazo la recta de x contra t en segmentos: en MRU la pendiente no cambia.",
+    },
+  });
+  await sleep(450);
   const pts: [number, number][] = [
     [440, 400],
     [480, 368],
@@ -164,14 +258,11 @@ export async function runMruGraphDemo(emit: Emit) {
   }
 
   emit("tool_call", {
-    name: "draw_text",
-    input: { x: 520, y: 248, text: "pendiente = v", size: 16 },
+    name: "speak",
+    input: {
+      text: "La pendiente de esa recta es la velocidad; si duplicas la velocidad, ¿la recta se ve más empinada o más plana?",
+    },
   });
-
-  await streamNarration(
-    emit,
-    "En movimiento rectilíneo uniforme la velocidad no cambia: por eso en la gráfica de posición contra tiempo la curva es una línea recta. La pendiente de esa línea es justamente la velocidad. Si duplicas la velocidad, ¿qué le pasaría a la inclinación de la recta?"
-  );
 }
 
 export async function runDemoMode(emit: Emit, question: string) {

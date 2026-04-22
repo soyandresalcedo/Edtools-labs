@@ -62,7 +62,7 @@ export async function POST(req: Request) {
               const prev = pendingInputs.get(ev.index) ?? "";
               pendingInputs.set(ev.index, prev + ev.delta.partial_json);
             } else if (ev.delta.type === "text_delta") {
-              emit("narration_delta", { text: ev.delta.text });
+              console.warn("[lesson] stray text_delta (ignored for UI)", ev.delta.text);
             }
           } else if (ev.type === "content_block_stop") {
             const name = pendingNames.get(ev.index);
@@ -96,6 +96,7 @@ export async function POST(req: Request) {
         emit("done", { ok: true });
         controller.close();
       } catch (err) {
+        console.error("[lesson] error", err);
         emit("error", { message: String(err) });
         controller.close();
       }

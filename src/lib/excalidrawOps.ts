@@ -1,4 +1,3 @@
-import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
 import type { ToolName } from "./tools";
 
 const VECTOR_COLORS: Record<string, string> = {
@@ -12,6 +11,7 @@ const VECTOR_COLORS: Record<string, string> = {
 export function toolCallToSkeletons(name: ToolName, input: any): any[] {
   switch (name) {
     case "clear_canvas":
+    case "speak":
       return [];
 
     case "draw_circle": {
@@ -138,7 +138,17 @@ export function toolCallToSkeletons(name: ToolName, input: any): any[] {
   return [];
 }
 
-export function buildElementsFromSkeletons(skeletons: any[]) {
-  return convertToExcalidrawElements(skeletons);
+let convertFn: ((s: any[]) => any[]) | null = null;
+
+async function getConvert(): Promise<(s: any[]) => any[]> {
+  if (convertFn) return convertFn;
+  const mod = await import("@excalidraw/excalidraw");
+  convertFn = mod.convertToExcalidrawElements as (s: any[]) => any[];
+  return convertFn;
+}
+
+export async function buildElementsFromSkeletons(skeletons: any[]) {
+  const convert = await getConvert();
+  return convert(skeletons);
 }
 
