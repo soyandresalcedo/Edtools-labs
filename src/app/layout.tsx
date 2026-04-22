@@ -1,0 +1,20 @@
+import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "PhysicsBoard",
+  description: "Claude-powered kinematics tutor that draws on a canvas.",
+};
+
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="es">
+      <body>{children}</body>
+    </html>
+  );
+}
+
