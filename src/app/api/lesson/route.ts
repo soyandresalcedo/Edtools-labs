@@ -34,7 +34,7 @@ export async function POST(req: Request) {
         if (!process.env.ANTHROPIC_API_KEY) {
           emit("error", {
             message:
-              "ANTHROPIC_API_KEY no está configurada. Agrega tu key en .env.local para habilitar /api/lesson.",
+              "ANTHROPIC_API_KEY is not configured. Add your key to .env.local to enable /api/lesson.",
           });
           controller.close();
           return;
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
           max_tokens: 2000,
           system: SYSTEM_PROMPT,
           tools: TOOLS,
-          messages: [{ role: "user", content: question || "¿Qué es la velocidad?" }],
+          messages: [{ role: "user", content: question || "What is velocity?" }],
         });
 
         const pendingInputs = new Map<number, string>();

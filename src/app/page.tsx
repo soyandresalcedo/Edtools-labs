@@ -1,215 +1,147 @@
 "use client";
 
-import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
-import { useRef, useState } from "react";
+import { useState } from "react";
+import { Menu } from "lucide-react";
 import { LessonCanvas } from "@/components/LessonCanvas";
 import {
-  buildElementsFromSkeletons,
-  toolCallToSkeletons,
-} from "@/lib/excalidrawOps";
-import type { ToolName } from "@/lib/tools";
-const STEP_DELAY_MS = 250;
-
-const PRESET_QUESTIONS = [
-  "Explícame el MRU",
-  "¿Velocidad vs aceleración?",
-  "Gráfica x-t de un auto a velocidad constante",
-  "¿Rapidez y velocidad son lo mismo?",
-] as const;
-
-type SSEEvent = { event: string; data: any };
-
-async function* parseSSE(res: Response): AsyncGenerator<SSEEvent> {
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split("\n\n");
-    buffer = blocks.pop() ?? "";
-
-    for (const block of blocks) {
-      const lines = block.split("\n");
-      const eventLine = lines.find((l) => l.startsWith("event: "));
-      const dataLine = lines.find((l) => l.startsWith("data: "));
-      if (!eventLine || !dataLine) continue;
-      yield {
-        event: eventLine.slice(7),
-        data: JSON.parse(dataLine.slice(6)),
-      };
-    }
-  }
-}
+  AgentSidebar,
+  FocusOpenButton,
+} from "@/components/agent/AgentSidebar";
+import { CanvasCaptionOverlay } from "@/components/agent/CanvasCaptionOverlay";
+import { PenCursor } from "@/components/agent/PenCursor";
+import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { useLessonStream } from "@/lib/useLessonStream";
+import { cn } from "@/lib/utils";
 
 export default function Home() {
-  const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
-  const [question, setQuestion] = useState("");
-  const [caption, setCaption] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [apiKeyHint, setApiKeyHint] = useState<string | null>(null);
+  const {
+    canvasRef,
+    status,
+    caption,
+    log,
+    apiKeyHint,
+    penState,
+    appState,
+    setAppState,
+    muted,
+    setMuted,
+    speechStatus,
+    speechEngine,
+    kokoroInitError,
+    retryKokoro,
+    voice,
+    setVoice,
+    voices,
+    ask,
+    stop,
+    newLesson,
+  } = useLessonStream();
 
-  function newLesson() {
-    apiRef.current?.updateScene({ elements: [] });
-    setCaption("");
-    setQuestion("");
-    setApiKeyHint(null);
+  const [focusMode, setFocusMode] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  function handleAsk(q: string) {
+    setMobileOpen(false);
+    void ask(q);
   }
-
-  async function askOpusWith(q: string) {
-    const trimmed = q.trim();
-    if (!trimmed || loading) return;
-
-    setLoading(true);
-    setCaption("");
-    setApiKeyHint(null);
-    setQuestion(trimmed);
-
-    let speakCount = 0;
-    let drawToolCalls = 0;
-    const scene: any[] = [];
-    apiRef.current?.updateScene({ elements: [] });
-
-    try {
-      const res = await fetch("/api/lesson", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: trimmed }),
-      });
-
-      if (!res.ok || !res.body) {
-        const text = await res.text().catch(() => "");
-        setCaption(`Error HTTP ${res.status}: ${text.slice(0, 200)}`);
-        return;
-      }
-
-      for await (const { event, data } of parseSSE(res)) {
-        if (event === "tool_call") {
-          const name = data.name as string;
-
-          if (name === "speak") {
-            const text = String(data.input?.text ?? "");
-            setCaption(text);
-            speakCount++;
-            const holdMs = Math.max(1200, text.length * 45);
-            await new Promise((r) => setTimeout(r, holdMs));
-            continue;
-          }
-
-          drawToolCalls++;
-
-          if (name === "clear_canvas") {
-            scene.length = 0;
-            apiRef.current?.updateScene({ elements: [] });
-          } else {
-            try {
-              const skeletons = toolCallToSkeletons(name as ToolName, data.input);
-              const elements = await buildElementsFromSkeletons(skeletons);
-              scene.push(...elements);
-              apiRef.current?.updateScene({ elements: [...scene] });
-            } catch (e) {
-              console.error("draw failed", data, e);
-            }
-          }
-          await new Promise((r) => setTimeout(r, STEP_DELAY_MS));
-        } else if (event === "narration_delta") {
-          // Legacy / otros backends; ignoramos en UI (Día 2 = solo speak tool)
-          console.warn("[ui] narration_delta ignored", data);
-        } else if (event === "tool_error") {
-          console.warn("tool_error", data);
-        } else if (event === "error") {
-          setCaption(data?.message ?? "Uy, algo salió mal. Intenta de nuevo.");
-          if (
-            typeof data?.message === "string" &&
-            data.message.includes("ANTHROPIC_API_KEY")
-          ) {
-            setApiKeyHint("Agrega ANTHROPIC_API_KEY en .env.local y reinicia pnpm dev.");
-          }
-          break;
-        } else if (event === "done") {
-          break;
-        }
-      }
-
-      if (drawToolCalls === 0 && speakCount > 0) {
-        setCaption(
-          (prev) =>
-            prev +
-            "  ⚠️ Hubo speak pero no se dibujó nada. Reformula la pregunta o intenta de nuevo.",
-        );
-      } else if (drawToolCalls === 0 && speakCount === 0) {
-        setCaption("No llegó respuesta. Revisa la consola del navegador.");
-      }
-    } catch (err) {
-      console.error("askOpus fatal", err);
-      setCaption(`Error: ${String(err)}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function askOpus() {
-    void askOpusWith(question);
-  }
-
-  const showThinking = loading && !caption;
 
   return (
-    <main className="flex flex-col h-screen">
-      <div className="flex-1 relative">
-        <LessonCanvas onReady={(api) => (apiRef.current = api)} />
+    <main
+      className={cn(
+        "grid h-screen w-screen grid-cols-1 bg-background",
+        focusMode ? "md:grid-cols-[0_1fr]" : "md:grid-cols-[360px_1fr]",
+      )}
+    >
+      <div
+        className={cn(
+          "hidden h-full min-h-0 md:flex",
+          focusMode && "md:hidden",
+        )}
+      >
+        <AgentSidebar
+          status={status}
+          caption={caption}
+          log={log}
+          apiKeyHint={apiKeyHint}
+          muted={muted}
+          setMuted={setMuted}
+          speechStatus={speechStatus}
+          speechEngine={speechEngine}
+          kokoroInitError={kokoroInitError}
+          retryKokoro={retryKokoro}
+          voice={voice}
+          setVoice={setVoice}
+          voices={voices}
+          onAsk={handleAsk}
+          onStop={stop}
+          onNewLesson={newLesson}
+          onCollapse={() => setFocusMode(true)}
+        />
       </div>
-      <div className="p-4 border-t bg-white space-y-2">
-        {showThinking ? (
-          <p className="text-sm text-slate-500 italic">Opus está dibujando…</p>
-        ) : null}
-        <p className="text-sm text-slate-700 min-h-[1.5rem]">{caption || " "}</p>
-        {apiKeyHint ? (
-          <p className="text-xs text-slate-500">{apiKeyHint}</p>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {PRESET_QUESTIONS.map((label) => (
-            <button
-              key={label}
-              type="button"
-              disabled={loading}
-              onClick={() => void askOpusWith(label)}
-              className="text-xs px-2 py-1 rounded-full border border-slate-300 bg-slate-50 hover:bg-slate-100 disabled:opacity-50"
-            >
-              {label}
-            </button>
-          ))}
-          <button
+
+      <section className="relative h-full min-h-0 overflow-hidden">
+        <div className="absolute left-4 top-4 z-20 flex items-center gap-2 md:hidden">
+          <Button
             type="button"
-            disabled={loading}
-            onClick={newLesson}
-            className="text-xs px-2 py-1 rounded-full border border-slate-400 bg-white hover:bg-slate-50 disabled:opacity-50"
+            variant="secondary"
+            size="icon"
+            onClick={() => setMobileOpen(true)}
+            aria-label="Open sidebar"
+            className="shadow"
           >
-            Nueva lección
-          </button>
+            <Menu className="h-4 w-4" />
+          </Button>
         </div>
-        <div className="flex gap-2">
-          <input
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="Pregúntame sobre cinemática..."
-            className="flex-1 px-3 py-2 border rounded"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !loading && question.trim()) askOpus();
-            }}
+
+        {focusMode ? (
+          <div className="hidden md:block">
+            <FocusOpenButton onOpen={() => setFocusMode(false)} />
+          </div>
+        ) : null}
+
+        <div className="relative h-full w-full">
+          <LessonCanvas
+            onReady={(api) => (canvasRef.current = api)}
+            onAppStateChange={setAppState}
           />
-          <button
-            onClick={askOpus}
-            disabled={loading || !question.trim()}
-            className="px-4 py-2 bg-slate-900 text-white rounded disabled:opacity-50"
-          >
-            {loading ? "..." : "Enséñame"}
-          </button>
+          <PenCursor state={penState} appState={appState} />
         </div>
-      </div>
+
+        <CanvasCaptionOverlay caption={caption} status={status} />
+      </section>
+
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetContent side="left" className="w-[320px] p-0">
+          <SheetTitle className="sr-only">PhysicsBoard agent</SheetTitle>
+          <SheetDescription className="sr-only">
+            Conversation, preset questions and input for the PhysicsBoard tutor.
+          </SheetDescription>
+          <AgentSidebar
+            status={status}
+            caption={caption}
+            log={log}
+            apiKeyHint={apiKeyHint}
+            muted={muted}
+            setMuted={setMuted}
+            speechStatus={speechStatus}
+            speechEngine={speechEngine}
+            kokoroInitError={kokoroInitError}
+            retryKokoro={retryKokoro}
+            voice={voice}
+            setVoice={setVoice}
+            voices={voices}
+            onAsk={handleAsk}
+            onStop={stop}
+            onNewLesson={newLesson}
+          />
+        </SheetContent>
+      </Sheet>
     </main>
   );
 }

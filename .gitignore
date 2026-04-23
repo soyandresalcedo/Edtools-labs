@@ -6,6 +6,9 @@ node_modules
 # env files
 .env*.local
 
+# typescript build cache
+*.tsbuildinfo
+
 # logs
 npm-debug.log*
 yarn-debug.log*

@@ -9,26 +9,44 @@ function normalize(q: string) {
     .replace(/\p{M}/gu, "");
 }
 
-/** Heurística: si la pregunta huele a MRU / gráfica x–t, usamos escena 2. */
-export function shouldUseMruDemo(question: string): boolean {
+export type DemoScene = "mru" | "mrua" | "freefall" | "v_vs_a";
+
+/** Classify the user's question into one of the four canned demo scenes. */
+export function pickDemoScene(question: string): DemoScene {
   const q = normalize(question);
-  if (!q.trim()) return false;
-  if (/\bescena\s*2\b/.test(q)) return true;
-  if (/\bmru\b/.test(q)) return true;
-  if (/movimiento rectilineo uniforme/.test(q)) return true;
-  if (/grafic[ao].*(tiempo|posicion)/.test(q)) return true;
-  if (/(tiempo|posicion).*grafic[ao]/.test(q)) return true;
-  if (/posicion.*tiempo/.test(q) || /tiempo.*posicion/.test(q)) return true;
-  if (/velocidad constante/.test(q) || /rapidez constante/.test(q)) return true;
-  return false;
+  if (!q.trim()) return "v_vs_a";
+
+  if (/\bscene\s*4\b/.test(q)) return "freefall";
+  if (/\bscene\s*3\b/.test(q)) return "mrua";
+  if (/\bscene\s*2\b/.test(q)) return "mru";
+  if (/\bscene\s*1\b/.test(q)) return "v_vs_a";
+
+  if (/\bmrua\b/.test(q)) return "mrua";
+  if (/\bmruv\b/.test(q)) return "mrua";
+  if (/uniformly accelerated/.test(q)) return "mrua";
+  if (/accelerated motion/.test(q)) return "mrua";
+  if (/\bv[-\s]*t\b/.test(q) && /graph/.test(q)) return "mrua";
+  if (/velocity[-\s]*time/.test(q)) return "mrua";
+
+  if (/\bfree ?fall\b/.test(q)) return "freefall";
+  if (/\bgravity\b/.test(q)) return "freefall";
+  if (/\bdrop(ping|ped)?\b/.test(q)) return "freefall";
+
+  if (/\bmru\b/.test(q)) return "mru";
+  if (/uniform (rectilinear )?motion/.test(q)) return "mru";
+  if (/constant (velocity|speed)/.test(q)) return "mru";
+  if (/position[-\s]*time/.test(q)) return "mru";
+  if (/\bx[-\s]*t\b/.test(q) && /graph/.test(q)) return "mru";
+
+  return "v_vs_a";
 }
 
-/** Escena 1: velocidad vs aceleración (pelota en el piso). Speech Variant intercalado. */
+/** Scene 1: speed vs acceleration (ball on the ground). Speech Variant interleaved. */
 export async function runVelocityVsAccelerationDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Te muestro en el tablero la diferencia entre velocidad y aceleración con una pelota en el suelo.",
+      text: "Let's see the difference between velocity and acceleration using a ball on the ground.",
     },
   });
   await sleep(400);
@@ -37,7 +55,7 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Primero dibujo el piso como línea de referencia para que tengamos dónde apoyar la pelota.",
+      text: "First I draw the ground as a reference line so the ball has something to rest on.",
     },
   });
   await sleep(400);
@@ -49,19 +67,19 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Aquí va la pelota: la usamos como partícula para no distraernos con la forma.",
+      text: "Here is the ball—we treat it as a particle so the shape does not distract us.",
     },
   });
   await sleep(400);
   emit("tool_call", {
     name: "draw_circle",
-    input: { x: 200, y: 480, r: 18, label: "pelota", color: "#ef4444" },
+    input: { x: 200, y: 480, r: 18, label: "ball", color: "#ef4444" },
   });
   await sleep(350);
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "La flecha azul es la velocidad: indica hacia dónde se mueve y qué tan rápido va en esa dirección.",
+      text: "The blue arrow is the velocity: direction and how fast the ball moves that way.",
     },
   });
   await sleep(450);
@@ -78,7 +96,7 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "La flecha roja es la aceleración: nos dice si esa velocidad se está aumentando, disminuyendo o girando.",
+      text: "The red arrow is the acceleration: it tells us if the velocity is speeding up, slowing down or turning.",
     },
   });
   await sleep(450);
@@ -95,7 +113,7 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Arriba dejo un título corto para que recuerdes el código de colores del tablero.",
+      text: "On top I add a short title so you remember the color code of the board.",
     },
   });
   await sleep(400);
@@ -104,7 +122,7 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
     input: {
       x: 420,
       y: 120,
-      text: "Velocidad (azul) vs aceleración (rojo)",
+      text: "Velocity (blue) vs acceleration (red)",
       size: 20,
     },
   });
@@ -112,17 +130,17 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Si la flecha roja apuntara al lado contrario de la azul, ¿qué le estaría pasando al movimiento de la pelota?",
+      text: "If the red arrow pointed opposite to the blue one, what would happen to the ball's motion?",
     },
   });
 }
 
-/** Escena 2: MRU — ejes t y x, gráfica x(t), auto con v constante. Speech Variant intercalado. */
+/** Scene 2: MRU — t and x axes, x(t) line, car with constant v. Speech Variant interleaved. */
 export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "En MRU la velocidad es constante; vamos a verlo en el piso y en una gráfica posición contra tiempo.",
+      text: "In uniform motion the velocity is constant; let's see it on the ground and on a position-vs-time graph.",
     },
   });
   await sleep(450);
@@ -132,20 +150,20 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Primero el título para saber que la pendiente de x contra t será constante en este caso.",
+      text: "First the title, so you know the slope of x versus t will stay the same in this case.",
     },
   });
   await sleep(400);
   emit("tool_call", {
     name: "draw_text",
-    input: { x: 60, y: 60, text: "MRU: velocidad constante → x(t) es una línea recta", size: 18 },
+    input: { x: 60, y: 60, text: "MRU: constant velocity → x(t) is a straight line", size: 18 },
   });
   await sleep(300);
 
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Abajo dibujo el camino recto como referencia del movimiento en una sola dimensión.",
+      text: "At the bottom I draw the straight road as a reference for one-dimensional motion.",
     },
   });
   await sleep(400);
@@ -158,19 +176,19 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Este rectángulo representa un auto que avanza siempre al mismo ritmo, sin frenar ni acelerar.",
+      text: "This rectangle is a car that keeps moving at the same pace, without braking or speeding up.",
     },
   });
   await sleep(450);
   emit("tool_call", {
     name: "draw_rect",
-    input: { x: 140, y: 456, w: 56, h: 28, label: "auto" },
+    input: { x: 140, y: 456, w: 56, h: 28, label: "car" },
   });
   await sleep(250);
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "La flecha azul marca la velocidad constante hacia la derecha, como en un carril sin tráfico.",
+      text: "The blue arrow shows the constant velocity to the right, like a clear open lane.",
     },
   });
   await sleep(450);
@@ -180,7 +198,7 @@ export async function runMruGraphDemo(emit: Emit) {
       from: [168, 470],
       to: [300, 470],
       kind: "velocity",
-      label: "v constante",
+      label: "constant v",
     },
   });
   await sleep(350);
@@ -188,13 +206,13 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "A la derecha abro el panel de la gráfica: tiempo en horizontal y posición en vertical.",
+      text: "On the right I open the graph panel: time on the horizontal axis, position on the vertical.",
     },
   });
   await sleep(450);
   emit("tool_call", {
     name: "draw_text",
-    input: { x: 400, y: 200, text: "Gráfica posición vs tiempo", size: 16 },
+    input: { x: 400, y: 200, text: "Position vs time graph", size: 16 },
   });
   await sleep(200);
 
@@ -203,7 +221,7 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Dibujo el eje del tiempo t y el eje de posición x con origen en la esquina del gráfico.",
+      text: "I draw the t axis and the x axis with the origin at the corner of the graph.",
     },
   });
   await sleep(450);
@@ -220,7 +238,7 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Etiqueto t y x para que sepas qué eje miras cuando hablemos de pendiente.",
+      text: "I label t and x so you know which axis you are reading when we talk about slope.",
     },
   });
   await sleep(400);
@@ -238,7 +256,7 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Ahora trazo la recta de x contra t en segmentos: en MRU la pendiente no cambia.",
+      text: "Now I trace x versus t in short segments: in MRU the slope never changes.",
     },
   });
   await sleep(450);
@@ -260,16 +278,159 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "La pendiente de esa recta es la velocidad; si duplicas la velocidad, ¿la recta se ve más empinada o más plana?",
+      text: "That slope is the velocity; if you double the velocity, would the line look steeper or flatter?",
+    },
+  });
+}
+
+/** Scene 3: MRUA — v–t graph, axes, labels, inclined line. Speech Variant interleaved. */
+export async function runMruaGraphDemo(emit: Emit) {
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "Uniformly accelerated motion means velocity changes at a steady rate. Let's see it on a v–t graph.",
+    },
+  });
+  await sleep(450);
+  emit("tool_call", { name: "clear_canvas", input: {} });
+  await sleep(300);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "I draw both axes and label them: time at the bottom, velocity on the left.",
+    },
+  });
+  await sleep(400);
+  emit("tool_call", {
+    name: "draw_line",
+    input: { from: [120, 500], to: [700, 500], style: "solid" },
+  });
+  await sleep(200);
+  emit("tool_call", {
+    name: "draw_line",
+    input: { from: [120, 500], to: [120, 100], style: "solid" },
+  });
+  await sleep(250);
+
+  emit("tool_call", {
+    name: "draw_text",
+    input: { x: 690, y: 520, text: "t", size: 18 },
+  });
+  await sleep(180);
+  emit("tool_call", {
+    name: "draw_text",
+    input: { x: 90, y: 110, text: "v", size: 18 },
+  });
+  await sleep(250);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "When acceleration is constant, v(t) is a straight line whose slope equals the acceleration a.",
+    },
+  });
+  await sleep(450);
+  emit("tool_call", {
+    name: "draw_line",
+    input: { from: [120, 500], to: [600, 200], style: "solid" },
+  });
+  await sleep(350);
+
+  emit("tool_call", {
+    name: "draw_text",
+    input: { x: 540, y: 180, text: "v(t)", size: 16 },
+  });
+  await sleep(250);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "If the acceleration were twice as large, would this line look steeper or flatter?",
+    },
+  });
+}
+
+/** Scene 4: free fall — ledge, ball, gravity arrow. Speech Variant interleaved. */
+export async function runFreeFallDemo(emit: Emit) {
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "In free fall we drop an object and only gravity acts. We ignore air resistance.",
+    },
+  });
+  await sleep(450);
+  emit("tool_call", { name: "clear_canvas", input: {} });
+  await sleep(300);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "I draw a short ledge near the top as the starting edge.",
+    },
+  });
+  await sleep(400);
+  emit("tool_call", {
+    name: "draw_line",
+    input: { from: [300, 120], to: [500, 120], style: "solid" },
+  });
+  await sleep(300);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "I place the ball right below the ledge, ready to fall.",
+    },
+  });
+  await sleep(400);
+  emit("tool_call", {
+    name: "draw_circle",
+    input: { x: 400, y: 160, r: 18, label: "ball", color: "#ef4444" },
+  });
+  await sleep(350);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "The gravity acceleration g always points straight down with the same magnitude.",
+    },
+  });
+  await sleep(450);
+  emit("tool_call", {
+    name: "draw_arrow",
+    input: {
+      from: [400, 178],
+      to: [400, 520],
+      kind: "acceleration",
+      label: "g",
+    },
+  });
+  await sleep(350);
+
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text: "If the initial velocity were zero, what happens to the velocity after one second?",
     },
   });
 }
 
 export async function runDemoMode(emit: Emit, question: string) {
-  if (shouldUseMruDemo(question)) {
-    await runMruGraphDemo(emit);
-  } else {
-    await runVelocityVsAccelerationDemo(emit);
+  const scene = pickDemoScene(question);
+  switch (scene) {
+    case "mru":
+      await runMruGraphDemo(emit);
+      break;
+    case "mrua":
+      await runMruaGraphDemo(emit);
+      break;
+    case "freefall":
+      await runFreeFallDemo(emit);
+      break;
+    case "v_vs_a":
+    default:
+      await runVelocityVsAccelerationDemo(emit);
+      break;
   }
-  emit("done", { ok: true, demo: true });
+  emit("done", { ok: true, demo: true, scene });
 }
