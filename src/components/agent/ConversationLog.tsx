@@ -24,10 +24,10 @@ export function ConversationLog({
     return (
       <div className="flex h-full flex-col items-center justify-center px-6 text-center">
         <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold text-primary">
-          PB
+          EL
         </div>
         <p className="text-sm font-medium text-foreground">
-          Hi, I&apos;m PhysicsBoard.
+          Hi, I&apos;m Edtools Labs.
         </p>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
           Pick a chip below or type a kinematics question. I&apos;ll explain it
@@ -60,7 +60,7 @@ export function ConversationLog({
                   "mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground",
                 )}
               >
-                {entry.role === "user" ? "You" : "PhysicsBoard"}
+                {entry.role === "user" ? "You" : "Edtools Labs"}
               </span>
               <div
                 className={cn(

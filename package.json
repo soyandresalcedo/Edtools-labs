@@ -2,7 +2,7 @@
   "name": "physicsboard",
   "private": true,
   "version": "1.0.0",
-  "description": "PhysicsBoard: Claude-powered kinematics tutor that draws on a canvas.",
+  "description": "Edtools Labs: Claude-powered kinematics tutor that draws on a canvas.",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

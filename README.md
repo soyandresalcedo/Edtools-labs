@@ -1,4 +1,4 @@
-# PhysicsBoard
+# Edtools Labs
 
 Claude-powered kinematics tutor that draws on a canvas and narrates every
 step with synchronized captions.

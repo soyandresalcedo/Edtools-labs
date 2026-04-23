@@ -3,6 +3,7 @@
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { AgentStatus as AgentStatusValue } from "@/lib/useLessonStream";
+import type { SpeechPhase } from "@/lib/useSpeech";
 
 const STATUS_COPY: Record<
   AgentStatusValue,
@@ -16,10 +17,21 @@ const STATUS_COPY: Record<
   error: { label: "Error", dot: "bg-red-500", variant: "destructive" },
 };
 
-export function AgentStatus({ status }: { status: AgentStatusValue }) {
+export function AgentStatus({
+  status,
+  speechPhase,
+}: {
+  status: AgentStatusValue;
+  speechPhase?: SpeechPhase;
+}) {
   const meta = STATUS_COPY[status];
   const animated =
     status === "thinking" || status === "speaking" || status === "drawing";
+
+  const label =
+    status === "speaking" && speechPhase === "generating"
+      ? "Generating voice"
+      : meta.label;
 
   return (
     <Badge variant={meta.variant} className="gap-2 px-3 py-1">
@@ -30,7 +42,7 @@ export function AgentStatus({ status }: { status: AgentStatusValue }) {
           animated && "animate-agent-pulse",
         )}
       />
-      {meta.label}
+      {label}
     </Badge>
   );
 }

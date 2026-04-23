@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type SpeechEngine = "kokoro" | "webspeech" | "none";
+export type SpeechPhase = "idle" | "generating" | "speaking";
 export type SpeechStatus =
   | "idle"
   | "loading"
@@ -26,6 +27,21 @@ const VOICE_KEY = "physicsboard.voice";
 const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const DEFAULT_KOKORO_VOICE: KokoroVoiceId = "af_heart";
 
+// #region debug log
+function dbg(location: string, message: string, data: Record<string, unknown> = {}, hypothesisId = "H1"): void {
+  try {
+    fetch('http://127.0.0.1:7478/ingest/0820f258-432e-46d9-aa71-6550b473722b', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '29030a' },
+      body: JSON.stringify({ sessionId: '29030a', runId: 'initial', hypothesisId, location, message, data, timestamp: Date.now() }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+// #endregion
+
 type KokoroDtype = "fp32" | "fp16" | "q8" | "q4" | "q4f16";
 
 function isKokoroVoiceId(v: string): v is KokoroVoiceId {
@@ -38,6 +54,7 @@ type KokoroTTS = InstanceType<KokoroModule["KokoroTTS"]>;
 interface SpeakTask {
   text: string;
   cancelled: boolean;
+  resolve?: (value: { durationMs: number }) => void;
 }
 
 function formatInitError(err: unknown): string {
@@ -53,7 +70,11 @@ function formatInitError(err: unknown): string {
 /** Single-thread WASM avoids SharedArrayBuffer / cross-origin isolation issues. */
 async function configureWasmSingleThread(): Promise<void> {
   try {
-    const { env } = await import("@huggingface/transformers");
+    const mod = await import("@huggingface/transformers");
+    // #region debug log
+    dbg("useSpeech.ts:configureWasmSingleThread", "transformers imported", { hasEnv: !!mod.env, keys: Object.keys(mod).slice(0, 10) }, "H2");
+    // #endregion
+    const { env } = mod;
     const wasm = (
       env as {
         backends?: { onnx?: { wasm?: { numThreads?: number } } };
@@ -61,6 +82,9 @@ async function configureWasmSingleThread(): Promise<void> {
     ).backends?.onnx?.wasm;
     if (wasm) wasm.numThreads = 1;
   } catch (e) {
+    // #region debug log
+    dbg("useSpeech.ts:configureWasmSingleThread", "transformers import FAILED", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? (e.stack ?? "").split("\n").slice(0, 5) : undefined }, "H1");
+    // #endregion
     console.warn("[useSpeech] transformers WASM preset skipped", e);
   }
 }
@@ -68,14 +92,21 @@ async function configureWasmSingleThread(): Promise<void> {
 export interface UseSpeech {
   status: SpeechStatus;
   engine: SpeechEngine;
+  phase: SpeechPhase;
   muted: boolean;
   setMuted: (value: boolean) => void;
   voice: KokoroVoiceId;
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
+  unlock: (opts?: { timeoutMs?: number }) => Promise<{ ok: boolean; state: string }>;
   speak: (text: string) => void;
+  speakAsync: (
+    text: string,
+    opts?: { timeoutMs?: number },
+  ) => Promise<{ durationMs: number }>;
   cancel: () => void;
   available: boolean;
+  isSpeaking: boolean;
   kokoroInitError: string | null;
   retryKokoro: () => void;
 }
@@ -129,10 +160,12 @@ function kokoroLoadAttempts(): Array<{ device: "webgpu" | "wasm"; dtype: KokoroD
 export function useSpeech(): UseSpeech {
   const [status, setStatus] = useState<SpeechStatus>("loading");
   const [engine, setEngine] = useState<SpeechEngine>("none");
+  const [phase, setPhase] = useState<SpeechPhase>("idle");
   const [muted, setMutedState] = useState<boolean>(false);
   const [voice, setVoiceState] = useState<KokoroVoiceId>(DEFAULT_KOKORO_VOICE);
   const [kokoroInitError, setKokoroInitError] = useState<string | null>(null);
   const [loadKey, setLoadKey] = useState(0);
+  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const ttsRef = useRef<KokoroTTS | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -142,10 +175,68 @@ export function useSpeech(): UseSpeech {
   const preferredVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const mutedRef = useRef(false);
   const voiceRef = useRef<KokoroVoiceId>(DEFAULT_KOKORO_VOICE);
+  const isSpeakingRef = useRef(false);
+  const readyWaitersRef = useRef<Array<() => void>>([]);
+  const engineRef = useRef<SpeechEngine>("none");
+  const statusRef = useRef<SpeechStatus>("loading");
 
   useEffect(() => {
     voiceRef.current = voice;
   }, [voice]);
+
+  useEffect(() => {
+    engineRef.current = engine;
+    statusRef.current = status;
+  }, [engine, status]);
+
+  const setSpeaking = useCallback((value: boolean) => {
+    isSpeakingRef.current = value;
+    setIsSpeaking(value);
+  }, []);
+
+  const notifyReady = useCallback(() => {
+    const waiters = readyWaitersRef.current;
+    if (!waiters.length) return;
+    readyWaitersRef.current = [];
+    waiters.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        // ignore
+      }
+    });
+  }, []);
+
+  const waitUntilReady = useCallback(
+    async (timeoutMs = 15000): Promise<boolean> => {
+      if (statusRef.current === "ready" && engineRef.current !== "none") return true;
+      // #region debug log
+      dbg(
+        "useSpeech.ts:waitUntilReady",
+        "waiting",
+        { status: statusRef.current, engine: engineRef.current, timeoutMs },
+        "R1",
+      );
+      // #endregion
+      return await new Promise<boolean>((resolve) => {
+        let done = false;
+        const finish = (ok: boolean) => {
+          if (done) return;
+          done = true;
+          resolve(ok);
+        };
+        readyWaitersRef.current.push(() => finish(true));
+        setTimeout(
+          () =>
+            finish(
+              statusRef.current === "ready" && engineRef.current !== "none",
+            ),
+          timeoutMs,
+        );
+      });
+    },
+    [],
+  );
 
   useEffect(() => {
     try {
@@ -168,9 +259,18 @@ export function useSpeech(): UseSpeech {
     }
   }, []);
 
+  useEffect(() => {
+    if (statusRef.current === "ready" && engineRef.current !== "none") notifyReady();
+  }, [engine, notifyReady, status]);
+
   const cancel = useCallback(() => {
     queueRef.current.forEach((t) => {
       t.cancelled = true;
+      try {
+        t.resolve?.({ durationMs: 0 });
+      } catch {
+        // ignore
+      }
     });
     queueRef.current = [];
     try {
@@ -186,7 +286,9 @@ export function useSpeech(): UseSpeech {
         // ignore
       }
     }
-  }, []);
+    setSpeaking(false);
+    setPhase("idle");
+  }, [setSpeaking]);
 
   const retryKokoro = useCallback(() => {
     cancel();
@@ -221,6 +323,11 @@ export function useSpeech(): UseSpeech {
     if (value) {
       queueRef.current.forEach((t) => {
         t.cancelled = true;
+        try {
+          t.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
       });
       queueRef.current = [];
       try {
@@ -230,8 +337,10 @@ export function useSpeech(): UseSpeech {
       }
       activeSourceRef.current = null;
       if (hasSpeechSynthesis()) window.speechSynthesis.cancel();
+      setSpeaking(false);
+      setPhase("idle");
     }
-  }, []);
+  }, [setSpeaking]);
 
   useEffect(() => {
     let disposed = false;
@@ -250,16 +359,32 @@ export function useSpeech(): UseSpeech {
         window.speechSynthesis.onvoiceschanged = warmVoices;
       }
 
+      // #region debug log
+      dbg("useSpeech.ts:init", "start", { hasWebGPU: hasWebGPU(), hasSpeech: hasSpeechSynthesis(), ua: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "n/a" }, "H1");
+      // #endregion
       try {
         await configureWasmSingleThread();
         if (disposed) return;
 
+        // #region debug log
+        dbg("useSpeech.ts:init", "importing kokoro-js", {}, "H1");
+        // #endregion
         const mod = await import("kokoro-js");
         if (disposed) return;
+        // #region debug log
+        dbg("useSpeech.ts:init", "kokoro-js imported", { hasKokoroTTS: !!mod.KokoroTTS, modKeys: Object.keys(mod).slice(0, 10) }, "H1");
+        // #endregion
 
         let lastErr: unknown;
-        for (const { device, dtype } of kokoroLoadAttempts()) {
+        const attempts = kokoroLoadAttempts();
+        // #region debug log
+        dbg("useSpeech.ts:init", "load attempts plan", { attempts, count: attempts.length }, "H4");
+        // #endregion
+        for (const { device, dtype } of attempts) {
           if (disposed) return;
+          // #region debug log
+          dbg("useSpeech.ts:init", "attempt start", { device, dtype }, "H4");
+          // #endregion
           try {
             const tts = await mod.KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
               dtype,
@@ -270,9 +395,39 @@ export function useSpeech(): UseSpeech {
             setEngine("kokoro");
             setKokoroInitError(null);
             setStatus("ready");
+            // #region debug log
+            dbg("useSpeech.ts:init", "KOKORO READY", { device, dtype }, "H3");
+            // #endregion
+            // Warm up the model to reduce first-utterance latency.
+            try {
+              const t0 = performance.now();
+              await tts.generate("Hi.", { voice: voiceRef.current });
+              const ms = Math.round(performance.now() - t0);
+              // #region debug log
+              dbg("useSpeech.ts:init", "warmup ok", { ms, device, dtype }, "W1");
+              // #endregion
+            } catch (e) {
+              // #region debug log
+              dbg(
+                "useSpeech.ts:init",
+                "warmup failed",
+                { error: e instanceof Error ? e.message : String(e), device, dtype },
+                "W1",
+              );
+              // #endregion
+            }
             return;
           } catch (e) {
             lastErr = e;
+            // #region debug log
+            dbg("useSpeech.ts:init", "attempt FAILED", {
+              device,
+              dtype,
+              errorName: e instanceof Error ? e.name : typeof e,
+              errorMsg: e instanceof Error ? e.message : String(e),
+              errorStack: e instanceof Error ? (e.stack ?? "").split("\n").slice(0, 8) : undefined,
+            }, "H4");
+            // #endregion
             console.warn(`[useSpeech] Kokoro load failed (${device}/${dtype})`, e);
           }
         }
@@ -280,6 +435,13 @@ export function useSpeech(): UseSpeech {
       } catch (err) {
         console.warn("[useSpeech] Kokoro load failed, falling back", err);
         if (disposed) return;
+        // #region debug log
+        dbg("useSpeech.ts:init", "FALLBACK to webspeech", {
+          errorName: err instanceof Error ? err.name : typeof err,
+          errorMsg: err instanceof Error ? err.message : String(err),
+          errorStack: err instanceof Error ? (err.stack ?? "").split("\n").slice(0, 8) : undefined,
+        }, "H1");
+        // #endregion
         setKokoroInitError(formatInitError(err));
         ttsRef.current = null;
         if (hasSpeechSynthesis()) {
@@ -311,20 +473,76 @@ export function useSpeech(): UseSpeech {
     return audioCtxRef.current;
   }, []);
 
+  const unlock = useCallback(
+    async (opts?: { timeoutMs?: number }): Promise<{ ok: boolean; state: string }> => {
+      const timeoutMs = opts?.timeoutMs ?? 2500;
+      const ctx = ensureAudioCtx();
+      if (!ctx) return { ok: false, state: "unavailable" };
+
+      const before = ctx.state;
+      // #region debug log
+      dbg("useSpeech.ts:unlock", "start", { before, timeoutMs }, "U1");
+      // #endregion
+
+      if (ctx.state === "running") return { ok: true, state: "running" };
+
+      const attempt = async () => {
+        try {
+          await ctx.resume();
+        } catch (e) {
+          // #region debug log
+          dbg(
+            "useSpeech.ts:unlock",
+            "resume failed",
+            { error: e instanceof Error ? e.message : String(e), before },
+            "U1",
+          );
+          // #endregion
+        }
+        return ctx.state;
+      };
+
+      if (timeoutMs <= 0) {
+        const state = await attempt();
+        return { ok: state === "running", state };
+      }
+
+      const state = await Promise.race([
+        attempt(),
+        new Promise<AudioContextState>((resolve) => {
+          setTimeout(() => resolve(ctx.state), timeoutMs);
+        }),
+      ]);
+
+      // #region debug log
+      dbg("useSpeech.ts:unlock", "done", { before, after: state }, "U1");
+      // #endregion
+      return { ok: state === "running", state };
+    },
+    [ensureAudioCtx],
+  );
+
   const playWithKokoro = useCallback(
     async (text: string, task: SpeakTask) => {
       const tts = ttsRef.current;
       if (!tts) throw new Error("Kokoro not ready");
+      setPhase("generating");
+      const gen0 = performance.now();
       const audio = await tts.generate(text, { voice: voiceRef.current });
+      const genMs = Math.round(performance.now() - gen0);
+      // #region debug log
+      dbg(
+        "useSpeech.ts:playWithKokoro",
+        "generated",
+        { genMs, textLen: text.length, voice: voiceRef.current },
+        "T1",
+      );
+      // #endregion
       if (task.cancelled || mutedRef.current) return;
       const ctx = ensureAudioCtx();
       if (!ctx) throw new Error("AudioContext unavailable");
-      if (ctx.state === "suspended") {
-        try {
-          await ctx.resume();
-        } catch {
-          // ignore
-        }
+      if (ctx.state !== "running") {
+        await unlock({ timeoutMs: 2500 });
       }
       if (task.cancelled || mutedRef.current) return;
       const pcm = (audio as { audio: Float32Array }).audio;
@@ -337,18 +555,58 @@ export function useSpeech(): UseSpeech {
       source.buffer = buffer;
       source.connect(ctx.destination);
       activeSourceRef.current = source;
+      const durationMs = Math.round((pcm.length / sampleRate) * 1000);
+      setSpeaking(true);
+      setPhase("speaking");
       await new Promise<void>((resolve) => {
-        source.onended = () => resolve();
+        let done = false;
+        const finish = (reason: string) => {
+          if (done) return;
+          done = true;
+          // #region debug log
+          dbg(
+            "useSpeech.ts:playWithKokoro",
+            "playback finished",
+            { reason, durationMs, genMs, ctxState: ctx.state },
+            "T3",
+          );
+          // #endregion
+          resolve();
+        };
+        source.onended = () => finish("onended");
+        source.onerror = () => finish("onerror");
+
+        // Watchdog: if onended never fires, don't stall the queue.
+        const watchdogMs = Math.max(800, durationMs + 800);
+        const t = setTimeout(() => {
+          try {
+            source.stop();
+          } catch {
+            // ignore
+          }
+          finish("watchdog");
+        }, watchdogMs);
+
+        const wrappedFinish = (reason: string) => {
+          clearTimeout(t);
+          finish(reason);
+        };
+        source.onended = () => wrappedFinish("onended");
+        source.onerror = () => wrappedFinish("onerror");
+
         try {
           source.start();
         } catch (e) {
           console.warn("[useSpeech] source.start failed", e);
-          resolve();
+          wrappedFinish("start_failed");
         }
       });
       if (activeSourceRef.current === source) activeSourceRef.current = null;
+      if (isSpeakingRef.current) setSpeaking(false);
+      setPhase("idle");
+      task.resolve?.({ durationMs });
     },
-    [ensureAudioCtx],
+    [ensureAudioCtx, setSpeaking, unlock],
   );
 
   const playWithWebSpeech = useCallback(async (text: string, task: SpeakTask) => {
@@ -360,19 +618,38 @@ export function useSpeech(): UseSpeech {
       utterance.volume = 1;
       const v = preferredVoiceRef.current ?? pickPreferredVoice();
       if (v) utterance.voice = v;
-      utterance.onend = () => resolve();
-      utterance.onerror = () => resolve();
+      const start = performance.now();
+      utterance.onend = () => {
+        const durationMs = Math.max(0, Math.round(performance.now() - start));
+        if (isSpeakingRef.current) setSpeaking(false);
+        setPhase("idle");
+        task.resolve?.({ durationMs });
+        resolve();
+      };
+      utterance.onerror = () => {
+        if (isSpeakingRef.current) setSpeaking(false);
+        setPhase("idle");
+        task.resolve?.({ durationMs: 0 });
+        resolve();
+      };
       if (task.cancelled || mutedRef.current) {
+        setPhase("idle");
+        task.resolve?.({ durationMs: 0 });
         resolve();
         return;
       }
       try {
+        setSpeaking(true);
+        setPhase("speaking");
         window.speechSynthesis.speak(utterance);
       } catch {
+        if (isSpeakingRef.current) setSpeaking(false);
+        setPhase("idle");
+        task.resolve?.({ durationMs: 0 });
         resolve();
       }
     });
-  }, []);
+  }, [setSpeaking]);
 
   const drainQueue = useCallback(async () => {
     if (runningRef.current) return;
@@ -397,12 +674,72 @@ export function useSpeech(): UseSpeech {
               // ignore
             }
           }
+          try {
+            task.resolve?.({ durationMs: 0 });
+          } catch {
+            // ignore
+          }
         }
       }
     } finally {
       runningRef.current = false;
     }
   }, [playWithKokoro, playWithWebSpeech]);
+
+  const speakAsync = useCallback(
+    async (text: string, opts?: { timeoutMs?: number }): Promise<{ durationMs: number }> => {
+      const timeoutMs = opts?.timeoutMs ?? 30000;
+      if (!text || mutedRef.current) return { durationMs: 0 };
+
+      const enqueue = (): Promise<{ durationMs: number }> => {
+        const task: SpeakTask = { text, cancelled: false };
+        const p = new Promise<{ durationMs: number }>((resolve) => {
+          task.resolve = resolve;
+        });
+        queueRef.current.push(task);
+        void drainQueue();
+
+        if (timeoutMs <= 0) return p;
+        return Promise.race([
+          p,
+          new Promise<{ durationMs: number }>((resolve) => {
+            setTimeout(() => resolve({ durationMs: 0 }), timeoutMs);
+          }),
+        ]);
+      };
+
+      if (engineRef.current === "none") {
+        const ok = await waitUntilReady(Math.min(timeoutMs, 15000));
+        if (!ok || engineRef.current === "none") {
+          // #region debug log
+          dbg(
+            "useSpeech.ts:speakAsync",
+            "dropped (not ready)",
+            {
+              status: statusRef.current,
+              engine: engineRef.current,
+              timeoutMs,
+              textLen: text.length,
+            },
+            "R2",
+          );
+          // #endregion
+          return { durationMs: 0 };
+        }
+      }
+
+      // #region debug log
+      dbg(
+        "useSpeech.ts:speakAsync",
+        "enqueue",
+        { engine: engineRef.current, status: statusRef.current, timeoutMs, textLen: text.length },
+        "T2",
+      );
+      // #endregion
+      return await enqueue();
+    },
+    [drainQueue, waitUntilReady],
+  );
 
   const speak = useCallback(
     (text: string) => {
@@ -417,14 +754,18 @@ export function useSpeech(): UseSpeech {
   return {
     status,
     engine,
+    phase,
     muted,
     setMuted,
     voice,
     setVoice,
     voices: KOKORO_VOICES,
+    unlock,
     speak,
+    speakAsync,
     cancel,
     available: engine !== "none",
+    isSpeaking,
     kokoroInitError,
     retryKokoro,
   };

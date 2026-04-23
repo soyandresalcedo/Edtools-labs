@@ -26,6 +26,7 @@ import {
   type KokoroVoiceId,
   type KokoroVoicesCatalog,
   type SpeechEngine,
+  type SpeechPhase,
   type SpeechStatus,
 } from "@/lib/useSpeech";
 
@@ -108,6 +109,8 @@ export interface UseLessonStream {
   log: LogEntry[];
   apiKeyHint: string | null;
   isBusy: boolean;
+  isAudioSpeaking: boolean;
+  unlockAudio: () => void;
   penState: PenState;
   appState: ViewportAppState;
   setAppState: (s: ViewportAppState) => void;
@@ -115,6 +118,7 @@ export interface UseLessonStream {
   setMuted: (value: boolean) => void;
   speechStatus: SpeechStatus;
   speechEngine: SpeechEngine;
+  speechPhase: SpeechPhase;
   speechAvailable: boolean;
   kokoroInitError: string | null;
   retryKokoro: () => void;
@@ -131,6 +135,11 @@ export function useLessonStream(): UseLessonStream {
   const abortRef = useRef<AbortController | null>(null);
   const penRef = useRef<Point>({ ...DEFAULT_PEN_REST });
   const speech = useSpeech();
+  const lastSpeakDurationMsRef = useRef(0);
+  const lastSpeakTextLenRef = useRef(0);
+  const pendingSpeakPromiseRef = useRef<Promise<{ durationMs: number }> | null>(
+    null,
+  );
 
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [caption, setCaption] = useState("");
@@ -165,9 +174,14 @@ export function useLessonStream(): UseLessonStream {
     abortRef.current?.abort();
     abortRef.current = null;
     speech.cancel();
+    pendingSpeakPromiseRef.current = null;
     hidePen();
     setStatus("idle");
   }, [hidePen, speech]);
+
+  const unlockAudio = useCallback(() => {
+    void speech.unlock({ timeoutMs: 2500 });
+  }, [speech]);
 
   const newLesson = useCallback(() => {
     stop();
@@ -184,6 +198,16 @@ export function useLessonStream(): UseLessonStream {
     async (question: string) => {
       const trimmed = question.trim();
       if (!trimmed || isBusy) return;
+
+      // Attempt to unlock audio on the user-initiated action.
+      unlockAudio();
+      // #region debug log
+      // useSpeech has the dbg() helper; here we keep it minimal with console so we can verify end-to-end.
+      console.debug("[useLessonStream] ask", {
+        speechEngine: speech.engine,
+        speechStatus: speech.status,
+      });
+      // #endregion
 
       stop();
       const controller = new AbortController();
@@ -232,6 +256,9 @@ export function useLessonStream(): UseLessonStream {
 
             if (name === "speak") {
               const text = String(data.input?.text ?? "");
+              if (pendingSpeakPromiseRef.current) {
+                await pendingSpeakPromiseRef.current;
+              }
               setStatus("speaking");
               setCaption(text);
               setLog((prev) => [
@@ -239,9 +266,17 @@ export function useLessonStream(): UseLessonStream {
                 { role: "agent", text, ts: Date.now() },
               ]);
               speakCount++;
-              speech.speak(text);
-              const holdMs = Math.max(1200, text.length * 45);
-              await new Promise((r) => setTimeout(r, holdMs));
+              const p = speech.speakAsync(text, {
+                timeoutMs: 30000,
+              });
+              pendingSpeakPromiseRef.current = p;
+              void p.then(({ durationMs }) => {
+                lastSpeakDurationMsRef.current = durationMs;
+                lastSpeakTextLenRef.current = text.length;
+                if (pendingSpeakPromiseRef.current === p) {
+                  pendingSpeakPromiseRef.current = null;
+                }
+              });
               continue;
             }
 
@@ -293,6 +328,14 @@ export function useLessonStream(): UseLessonStream {
 
               for (const textSkel of textSkeletons) {
                 if (controller.signal.aborted) return;
+                const lastSpeakMs = lastSpeakDurationMsRef.current;
+                const lastCaptionLen = Math.max(1, lastSpeakTextLenRef.current);
+                const approxCharDelayMs = lastSpeakMs
+                  ? Math.max(
+                      20,
+                      Math.min(85, Math.round(lastSpeakMs / lastCaptionLen)),
+                    )
+                  : undefined;
                 const { rest } = await typewriteText({
                   skeleton: textSkel,
                   api: canvasRef.current,
@@ -301,6 +344,7 @@ export function useLessonStream(): UseLessonStream {
                   penColor: color,
                   setPen: setPenState,
                   signal: controller.signal,
+                  charDelayMs: approxCharDelayMs,
                 });
                 penRef.current = rest;
               }
@@ -349,6 +393,9 @@ export function useLessonStream(): UseLessonStream {
 
         // Gentle idle glide back to a resting point.
         if (!controller.signal.aborted) {
+          if (pendingSpeakPromiseRef.current) {
+            await pendingSpeakPromiseRef.current;
+          }
           await glidePen({
             from: penRef.current,
             to: { ...DEFAULT_PEN_REST },
@@ -382,7 +429,7 @@ export function useLessonStream(): UseLessonStream {
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [hidePen, isBusy, speech, stop],
+    [hidePen, isBusy, speech, stop, unlockAudio],
   );
 
   return {
@@ -392,6 +439,8 @@ export function useLessonStream(): UseLessonStream {
     log,
     apiKeyHint,
     isBusy,
+    isAudioSpeaking: speech.isSpeaking,
+    unlockAudio,
     penState,
     appState,
     setAppState,
@@ -399,6 +448,7 @@ export function useLessonStream(): UseLessonStream {
     setMuted: speech.setMuted,
     speechStatus: speech.status,
     speechEngine: speech.engine,
+    speechPhase: speech.phase,
     speechAvailable: speech.available,
     kokoroInitError: speech.kokoroInitError,
     retryKokoro: speech.retryKokoro,

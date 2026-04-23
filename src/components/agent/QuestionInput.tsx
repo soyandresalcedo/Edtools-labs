@@ -8,21 +8,27 @@ import { cn } from "@/lib/utils";
 import type { AgentStatus } from "@/lib/useLessonStream";
 
 export function QuestionInput({
+  onUserGesture,
   onSubmit,
   onStop,
   status,
+  disabled,
 }: {
+  onUserGesture: () => void;
   onSubmit: (q: string) => void;
   onStop: () => void;
   status: AgentStatus;
+  disabled?: boolean;
 }) {
   const [value, setValue] = useState("");
   const isBusy =
     status === "thinking" || status === "speaking" || status === "drawing";
+  const blocked = isBusy || !!disabled;
 
   function submit() {
     const trimmed = value.trim();
-    if (!trimmed || isBusy) return;
+    if (!trimmed || blocked) return;
+    onUserGesture();
     onSubmit(trimmed);
     setValue("");
   }
@@ -47,7 +53,7 @@ export function QuestionInput({
         placeholder="Ask me about kinematics…"
         rows={1}
         className="min-h-[40px] max-h-40 resize-none border-0 bg-transparent px-2 py-2 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
-        disabled={isBusy}
+        disabled={blocked}
       />
       {isBusy ? (
         <Button

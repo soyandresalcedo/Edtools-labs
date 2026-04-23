@@ -4,7 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PhysicsBoard — a kinematics tutor that draws",
+  title: "Edtools Labs — a kinematics tutor that draws",
   description:
     "Claude-powered tutor that explains kinematics on an infinite canvas with synchronized captions.",
 };

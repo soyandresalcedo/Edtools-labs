@@ -27,6 +27,7 @@ import type {
   KokoroVoiceId,
   KokoroVoicesCatalog,
   SpeechEngine,
+  SpeechPhase,
   SpeechStatus,
 } from "@/lib/useSpeech";
 
@@ -39,6 +40,7 @@ export function AgentSidebar({
   setMuted,
   speechStatus,
   speechEngine,
+  speechPhase,
   kokoroInitError,
   retryKokoro,
   voice,
@@ -48,6 +50,8 @@ export function AgentSidebar({
   onStop,
   onNewLesson,
   onCollapse,
+  isAudioSpeaking,
+  onUserGesture,
 }: {
   status: AgentStatusValue;
   caption: string;
@@ -57,6 +61,7 @@ export function AgentSidebar({
   setMuted: (value: boolean) => void;
   speechStatus: SpeechStatus;
   speechEngine: SpeechEngine;
+  speechPhase: SpeechPhase;
   kokoroInitError: string | null;
   retryKokoro: () => void;
   voice: KokoroVoiceId;
@@ -66,6 +71,8 @@ export function AgentSidebar({
   onStop: () => void;
   onNewLesson: () => void;
   onCollapse?: () => void;
+  isAudioSpeaking: boolean;
+  onUserGesture: () => void;
 }) {
   const isBusy =
     status === "thinking" || status === "speaking" || status === "drawing";
@@ -98,11 +105,11 @@ export function AgentSidebar({
       <header className="flex items-center justify-between gap-2 border-b px-4 py-3">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-xs font-semibold text-primary-foreground">
-            PB
+            EL
           </div>
           <div className="flex flex-col">
             <span className="text-sm font-semibold leading-none">
-              PhysicsBoard
+              Edtools Labs
             </span>
             <span className="text-[11px] text-muted-foreground">
               Kinematics tutor · Opus 4.7
@@ -227,7 +234,7 @@ export function AgentSidebar({
       ) : null}
 
       <div className="px-4 py-2">
-        <AgentStatus status={status} />
+        <AgentStatus status={status} speechPhase={speechPhase} />
         {apiKeyHint ? (
           <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
             {apiKeyHint}
@@ -241,13 +248,25 @@ export function AgentSidebar({
         <ConversationLog
           entries={log}
           currentCaption={caption}
-          isSpeaking={status === "speaking"}
+          isSpeaking={isAudioSpeaking}
         />
       </div>
 
       <div className="flex flex-col gap-3 border-t bg-background px-4 py-3">
-        <QuestionChips onSelect={onAsk} disabled={isBusy} />
-        <QuestionInput onSubmit={onAsk} onStop={onStop} status={status} />
+        <QuestionChips
+          onSelect={(q) => {
+            onUserGesture();
+            onAsk(q);
+          }}
+          disabled={isBusy || speechStatus !== "ready"}
+        />
+        <QuestionInput
+          onUserGesture={onUserGesture}
+          onSubmit={onAsk}
+          onStop={onStop}
+          status={status}
+          disabled={speechStatus !== "ready"}
+        />
       </div>
     </aside>
   );

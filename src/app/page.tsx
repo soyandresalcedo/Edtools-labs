@@ -26,6 +26,8 @@ export default function Home() {
     caption,
     log,
     apiKeyHint,
+    isAudioSpeaking,
+    unlockAudio,
     penState,
     appState,
     setAppState,
@@ -33,6 +35,7 @@ export default function Home() {
     setMuted,
     speechStatus,
     speechEngine,
+    speechPhase,
     kokoroInitError,
     retryKokoro,
     voice,
@@ -73,6 +76,7 @@ export default function Home() {
           setMuted={setMuted}
           speechStatus={speechStatus}
           speechEngine={speechEngine}
+          speechPhase={speechPhase}
           kokoroInitError={kokoroInitError}
           retryKokoro={retryKokoro}
           voice={voice}
@@ -82,6 +86,8 @@ export default function Home() {
           onStop={stop}
           onNewLesson={newLesson}
           onCollapse={() => setFocusMode(true)}
+          isAudioSpeaking={isAudioSpeaking}
+          onUserGesture={unlockAudio}
         />
       </div>
 
@@ -118,9 +124,9 @@ export default function Home() {
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-[320px] p-0">
-          <SheetTitle className="sr-only">PhysicsBoard agent</SheetTitle>
+          <SheetTitle className="sr-only">Edtools Labs agent</SheetTitle>
           <SheetDescription className="sr-only">
-            Conversation, preset questions and input for the PhysicsBoard tutor.
+            Conversation, preset questions and input for the Edtools Labs tutor.
           </SheetDescription>
           <AgentSidebar
             status={status}
@@ -131,6 +137,7 @@ export default function Home() {
             setMuted={setMuted}
             speechStatus={speechStatus}
             speechEngine={speechEngine}
+            speechPhase={speechPhase}
             kokoroInitError={kokoroInitError}
             retryKokoro={retryKokoro}
             voice={voice}
@@ -139,6 +146,8 @@ export default function Home() {
             onAsk={handleAsk}
             onStop={stop}
             onNewLesson={newLesson}
+            isAudioSpeaking={isAudioSpeaking}
+            onUserGesture={unlockAudio}
           />
         </SheetContent>
       </Sheet>
