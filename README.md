@@ -1,13 +1,17 @@
 # Edtools Labs
 
-Claude-powered kinematics tutor that draws on a canvas and narrates every
-step with synchronized captions.
+AI agent designed to teach STEAM to anyone by leveraging "hands," voice, and
+smartphone sensors to turn any device into an interactive lab platform. The
+goal is to democratize this kind of education.
+
+This repository contains a **Claude-powered kinematics tutor** that draws on a
+canvas and narrates every step with synchronized captions.
 
 ## How it works
 
 Opus uses the **`speak`** tool (Speech Variant): one short sentence before
 each small group of drawings. The client renders that text as a caption and
-waits proportionally to its length before the next stroke. Free text
+aligns stroke timing with speech where possible. Free text
 outside tools is ignored—only `speak` plus drawing tools reach the UI.
 
 The UI exposes preset question chips for the supported topics and a
@@ -44,4 +48,4 @@ Four canned scenes are routed from the question text:
 
 ## License
 
-MIT
+[GNU General Public License v3.0](LICENSE) (GPL-3.0)
