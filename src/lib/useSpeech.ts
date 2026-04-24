@@ -54,9 +54,14 @@ function isKokoroVoiceId(v: string): v is KokoroVoiceId {
 type KokoroModule = typeof import("kokoro-js");
 type KokoroTTS = InstanceType<KokoroModule["KokoroTTS"]>;
 
+/** Móvil: no se carga Kokoro; UI y retry pueden reconocer este token. */
+export const KOKORO_SKIPPED_MOBILE = "kokoro_skipped_mobile" as const;
+
 interface SpeakTask {
   text: string;
   cancelled: boolean;
+  /** BCP-47, p. ej. "es-419" para Lab; vacío/omitido = inglés (Teach). */
+  webSpeechLang?: string;
   resolve?: (value: { durationMs: number }) => void;
 }
 
@@ -160,7 +165,7 @@ export interface UseSpeech {
   speak: (text: string) => void;
   speakAsync: (
     text: string,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; webSpeechLang?: string },
   ) => Promise<{ durationMs: number }>;
   cancel: () => void;
   available: boolean;
@@ -207,6 +212,39 @@ function pickPreferredVoice(): SpeechSynthesisVoice | null {
     if (match) return match;
   }
   return voices.find((v) => v.lang.startsWith("en")) ?? voices[0];
+}
+
+function normLang(s: string): string {
+  return s.toLowerCase().replace(/_/g, "-");
+}
+
+/** Voz de Web Speech; Kokoro se ignora. Preferencia es-419 / es-MX / cualquier es-. */
+function pickPreferredVoiceForLang(bcp47: string): SpeechSynthesisVoice | null {
+  if (!hasSpeechSynthesis()) return null;
+  const voices = window.speechSynthesis.getVoices();
+  if (!voices.length) return null;
+  const want = normLang(bcp47);
+  if (want.startsWith("en")) {
+    return pickPreferredVoice();
+  }
+  if (want.startsWith("es")) {
+    const prefer = [
+      /^es-mx$/i,
+      /^es-419$/i,
+      /^es-us$/i,
+      /^es-co$/i,
+      /^es-ar$/i,
+    ];
+    for (const re of prefer) {
+      const m = voices.find((v) => re.test(normLang(v.lang)));
+      if (m) return m;
+    }
+    const anyEs = voices.find((v) => normLang(v.lang).startsWith("es"));
+    if (anyEs) return anyEs;
+  }
+  const byExact = voices.find((v) => normLang(v.lang) === want);
+  if (byExact) return byExact;
+  return pickPreferredVoice();
 }
 
 function isMobileLike(): boolean {
@@ -444,6 +482,26 @@ export function useSpeech(): UseSpeech {
     async function init() {
       if (typeof window === "undefined") return;
 
+      // Móvil: no cargar Kokoro; Web Speech con español (Lab) o inglés (Teach) en el utterance.
+      if (isMobileLike()) {
+        if (hasSpeechSynthesis()) {
+          const warmVoices = () => {
+            preferredVoiceRef.current = pickPreferredVoice();
+            void pickPreferredVoiceForLang("es-419");
+          };
+          warmVoices();
+          window.speechSynthesis.onvoiceschanged = warmVoices;
+        }
+        ttsRef.current = null;
+        setKokoroProgress(null);
+        setKokoroInitError(KOKORO_SKIPPED_MOBILE);
+        setKokoroStatus("failed");
+        // #region debug log
+        dbg("useSpeech.ts:init", "mobile: Kokoro skipped, Web Speech only", {}, "H0");
+        // #endregion
+        return;
+      }
+
       setKokoroStatus("loading");
       setKokoroProgress(null);
       setKokoroInitError(null);
@@ -455,6 +513,7 @@ export function useSpeech(): UseSpeech {
       if (hasSpeechSynthesis()) {
         const warmVoices = () => {
           preferredVoiceRef.current = pickPreferredVoice();
+          void pickPreferredVoiceForLang("es-419");
         };
         warmVoices();
         window.speechSynthesis.onvoiceschanged = warmVoices;
@@ -815,12 +874,16 @@ export function useSpeech(): UseSpeech {
   }, [playWithKokoro, playWithWebSpeech]);
 
   const speakAsync = useCallback(
-    async (text: string, opts?: { timeoutMs?: number }): Promise<{ durationMs: number }> => {
+    async (text: string, opts?: { timeoutMs?: number; webSpeechLang?: string }): Promise<{ durationMs: number }> => {
       const timeoutMs = opts?.timeoutMs ?? 30000;
       if (!text || mutedRef.current) return { durationMs: 0 };
 
       const enqueue = (): Promise<{ durationMs: number }> => {
-        const task: SpeakTask = { text, cancelled: false };
+        const task: SpeakTask = {
+          text,
+          cancelled: false,
+          webSpeechLang: opts?.webSpeechLang,
+        };
         const p = new Promise<{ durationMs: number }>((resolve) => {
           task.resolve = resolve;
         });

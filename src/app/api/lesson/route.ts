@@ -11,19 +11,73 @@ type Emit = (event: string, data: unknown) => void;
 
 const isDemoMode = () => process.env.DEMO_MODE === "1";
 
+const MAX_QUESTION = 2000;
+const MAX_HANDOFF = 4000;
+const MAX_SENSOR = 1000;
+
+const badRequest = (obj: { error: string; field?: string }) =>
+  new Response(JSON.stringify(obj), {
+    status: 400,
+    headers: { "Content-Type": "application/json" },
+  });
+
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => null)) as null | {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return badRequest({ error: "Invalid JSON body" });
+  }
+  if (body === null || typeof body !== "object") {
+    return badRequest({ error: "Body must be a JSON object" });
+  }
+  const b = body as {
     question?: unknown;
     mode?: unknown;
     handoffContext?: unknown;
     sensorSummary?: unknown;
   };
-  const question = typeof body?.question === "string" ? body.question : "";
-  const mode = body?.mode === "lab" ? "lab" : "teach";
-  const handoffContext =
-    typeof body?.handoffContext === "string" ? body.handoffContext : "";
-  const sensorSummary =
-    typeof body?.sensorSummary === "string" ? body.sensorSummary : "";
+  if (b.question !== undefined && b.question !== null && typeof b.question !== "string") {
+    return badRequest({ error: "question must be a string", field: "question" });
+  }
+  if (
+    b.handoffContext !== undefined &&
+    b.handoffContext !== null &&
+    typeof b.handoffContext !== "string"
+  ) {
+    return badRequest({
+      error: "handoffContext must be a string",
+      field: "handoffContext",
+    });
+  }
+  if (
+    b.sensorSummary !== undefined &&
+    b.sensorSummary !== null &&
+    typeof b.sensorSummary !== "string"
+  ) {
+    return badRequest({
+      error: "sensorSummary must be a string",
+      field: "sensorSummary",
+    });
+  }
+  if (b.mode !== undefined && b.mode !== null && b.mode !== "teach" && b.mode !== "lab") {
+    return badRequest({ error: "mode must be teach or lab", field: "mode" });
+  }
+
+  const question = typeof b.question === "string" ? b.question : "";
+  const mode = b.mode === "lab" ? "lab" : "teach";
+  const handoffContext = typeof b.handoffContext === "string" ? b.handoffContext : "";
+  const sensorSummary = typeof b.sensorSummary === "string" ? b.sensorSummary : "";
+
+  if (question.length > MAX_QUESTION) {
+    return badRequest({ error: "question exceeds maximum length", field: "question" });
+  }
+  if (handoffContext.length > MAX_HANDOFF) {
+    return badRequest({ error: "handoffContext exceeds maximum length", field: "handoffContext" });
+  }
+  if (sensorSummary.length > MAX_SENSOR) {
+    return badRequest({ error: "sensorSummary exceeds maximum length", field: "sensorSummary" });
+  }
 
   const encoder = new TextEncoder();
 

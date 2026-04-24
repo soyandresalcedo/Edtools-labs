@@ -25,12 +25,13 @@ import type {
   LogEntry,
 } from "@/lib/useLessonStream";
 import { useTiltEvents, type TiltEvent } from "@/lib/useTiltEvents";
-import type {
-  KokoroVoiceId,
-  KokoroVoicesCatalog,
-  SpeechEngine,
-  SpeechPhase,
-  SpeechStatus,
+import {
+  KOKORO_SKIPPED_MOBILE,
+  type KokoroVoiceId,
+  type KokoroVoicesCatalog,
+  type SpeechEngine,
+  type SpeechPhase,
+  type SpeechStatus,
 } from "@/lib/useSpeech";
 
 function buildHandoffContext(entries: LogEntry[]): string {
@@ -104,6 +105,8 @@ export function AgentSidebar({
   onCollapse,
   isAudioSpeaking,
   onUserGesture,
+  showLabReturn = false,
+  onReturnToTeach,
 }: {
   status: AgentStatusValue;
   caption: string;
@@ -132,6 +135,8 @@ export function AgentSidebar({
   onCollapse?: () => void;
   isAudioSpeaking: boolean;
   onUserGesture: () => void;
+  showLabReturn?: boolean;
+  onReturnToTeach?: () => void;
 }) {
   const isBusy =
     status === "thinking" || status === "speaking" || status === "drawing";
@@ -315,29 +320,42 @@ export function AgentSidebar({
         </div>
       ) : speechEngine === "webspeech" && speechStatus === "ready" ? (
         <div className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
-          <p className="mb-2">
-            Kokoro is not available right now, so you are hearing your system&apos;s
-            built-in speech instead. You can keep using the app normally.
-          </p>
-          <p className="mb-2 text-[10px] text-muted-foreground/90">
-            Tip: on mobile, the first Kokoro load can take a while. If it keeps
-            failing, try Wi‑Fi vs data, disable Data Saver/VPN/DNS blockers, then
-            tap Retry.
-          </p>
-          {kokoroInitError ? (
+          {kokoroInitError === KOKORO_SKIPPED_MOBILE ? (
+            <p className="mb-2">
+              En móvil usamos la <strong>voz del sistema en español</strong> (Lab)
+              o en inglés (lección) sin cargar Kokoro. Así la app responde al
+              instante.
+            </p>
+          ) : (
+            <>
+              <p className="mb-2">
+                Kokoro is not available right now, so you are hearing your
+                system&apos;s built-in speech instead. You can keep using the
+                app normally.
+              </p>
+              <p className="mb-2 text-[10px] text-muted-foreground/90">
+                Tip: on mobile, the first Kokoro load can take a while. If it
+                keeps failing, try Wi‑Fi vs data, disable Data Saver/VPN/DNS
+                blockers, then tap Retry.
+              </p>
+            </>
+          )}
+          {kokoroInitError && kokoroInitError !== KOKORO_SKIPPED_MOBILE ? (
             <pre className="mb-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-[10px] leading-tight text-destructive">
               {kokoroInitError}
             </pre>
           ) : null}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 w-full text-xs"
-            onClick={() => retryKokoro()}
-          >
-            Retry Kokoro
-          </Button>
+          {kokoroInitError !== KOKORO_SKIPPED_MOBILE ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-full text-xs"
+              onClick={() => retryKokoro()}
+            >
+              Retry Kokoro
+            </Button>
+          ) : null}
         </div>
       ) : null}
 
@@ -350,6 +368,27 @@ export function AgentSidebar({
         ) : null}
       </div>
 
+      {showLabReturn && onReturnToTeach ? (
+        <div className="border-b border-primary/20 bg-primary/5 px-4 py-2">
+          <p className="mb-2 text-[11px] leading-snug text-foreground">
+            Lab completado. Vuelve a la lección en inglés: el contexto del lab se
+            envía al tutor automáticamente.
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 w-full text-xs"
+            onClick={() => {
+              onUserGesture();
+              onReturnToTeach();
+            }}
+            disabled={isBusy}
+          >
+            Volver a la lección
+          </Button>
+        </div>
+      ) : null}
+
       <Separator />
 
       {labOpen ? (
@@ -357,7 +396,7 @@ export function AgentSidebar({
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Lab mode (PoC 3)
+                Lab (sensor)
               </p>
               <p className="text-[11px] text-muted-foreground">
                 {completed

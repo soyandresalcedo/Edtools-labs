@@ -47,6 +47,8 @@ export default function Home() {
     askLab,
     stop,
     newLesson,
+    showLabReturn,
+    returnToTeach,
   } = useLessonStream();
 
   const [focusMode, setFocusMode] = useState(false);
@@ -97,6 +99,8 @@ export default function Home() {
           onCollapse={() => setFocusMode(true)}
           isAudioSpeaking={isAudioSpeaking}
           onUserGesture={unlockAudio}
+          showLabReturn={showLabReturn}
+          onReturnToTeach={returnToTeach}
         />
       </div>
 
@@ -163,6 +167,8 @@ export default function Home() {
             onNewLesson={newLesson}
             isAudioSpeaking={isAudioSpeaking}
             onUserGesture={unlockAudio}
+            showLabReturn={showLabReturn}
+            onReturnToTeach={returnToTeach}
           />
         </SheetContent>
       </Sheet>

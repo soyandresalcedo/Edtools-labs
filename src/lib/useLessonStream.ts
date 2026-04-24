@@ -135,6 +135,8 @@ export interface UseLessonStream {
   }): Promise<void>;
   stop(): void;
   newLesson(): void;
+  showLabReturn: boolean;
+  returnToTeach: () => void;
 }
 
 export function useLessonStream(): UseLessonStream {
@@ -152,6 +154,8 @@ export function useLessonStream(): UseLessonStream {
   const [caption, setCaption] = useState("");
   const [log, setLog] = useState<LogEntry[]>([]);
   const [apiKeyHint, setApiKeyHint] = useState<string | null>(null);
+  const [showLabReturn, setShowLabReturn] = useState(false);
+  const labReturnContextRef = useRef<string | null>(null);
   const [penState, setPenState] = useState<PenState>(DEFAULT_PEN_STATE);
   const [appState, setAppStateInternal] = useState<ViewportAppState>(
     DEFAULT_VIEWPORT_STATE,
@@ -192,6 +196,8 @@ export function useLessonStream(): UseLessonStream {
 
   const newLesson = useCallback(() => {
     stop();
+    labReturnContextRef.current = null;
+    setShowLabReturn(false);
     canvasRef.current?.updateScene({ elements: [] });
     penRef.current = { ...DEFAULT_PEN_REST };
     setPenState(DEFAULT_PEN_STATE);
@@ -214,6 +220,9 @@ export function useLessonStream(): UseLessonStream {
     ) => {
       const trimmed = input.question.trim();
       if (!trimmed || isBusy) return;
+
+      labReturnContextRef.current = null;
+      setShowLabReturn(false);
 
       // Attempt to unlock audio on the user-initiated action.
       unlockAudio();
@@ -246,6 +255,7 @@ export function useLessonStream(): UseLessonStream {
 
       let speakCount = 0;
       let drawToolCalls = 0;
+      const labAgentLines: string[] = [];
 
       try {
         // Excalidraw se carga async (dynamic import ssr:false). Evita "dibujar a la nada"
@@ -306,8 +316,10 @@ export function useLessonStream(): UseLessonStream {
                 { role: "agent", text, ts: Date.now() },
               ]);
               speakCount++;
+              if (mode === "lab") labAgentLines.push(text);
               const p = speech.speakAsync(text, {
                 timeoutMs: 30000,
+                webSpeechLang: mode === "lab" ? "es-419" : "en-US",
               });
               pendingSpeakPromiseRef.current = p;
               void p.then(({ durationMs }) => {
@@ -425,6 +437,17 @@ export function useLessonStream(): UseLessonStream {
           return;
         }
 
+        if (mode === "lab" && speakCount > 0) {
+          const ctx = `[[Lab completion]]
+sensorSummary: ${input.sensorSummary ?? "(none)"}
+From teach (handoffContext):
+${input.handoffContext && input.handoffContext.length > 0 ? input.handoffContext : "(none)"}
+Lab voice lines (in order, Spanish):
+${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
+          labReturnContextRef.current = ctx;
+          setShowLabReturn(true);
+        }
+
         if (drawToolCalls === 0 && speakCount > 0) {
           toast.warning("Nothing was drawn", {
             description: "Rephrase the question to get a visual explanation.",
@@ -490,6 +513,18 @@ export function useLessonStream(): UseLessonStream {
     [askInternal],
   );
 
+  const returnToTeach = useCallback(() => {
+    const ctx = labReturnContextRef.current;
+    if (!ctx) return;
+    labReturnContextRef.current = null;
+    setShowLabReturn(false);
+    void askInternal("teach", {
+      question:
+        "We just completed the phone tilt lab. In one or two short classroom English sentences, connect the tilt experience and the lab dialogue to the kinematics point we are studying, then ask one Socratic follow-up for the main topic.",
+      handoffContext: ctx,
+    });
+  }, [askInternal]);
+
   return {
     canvasRef,
     status,
@@ -519,5 +554,7 @@ export function useLessonStream(): UseLessonStream {
     askLab,
     stop,
     newLesson,
+    showLabReturn,
+    returnToTeach,
   };
 }
