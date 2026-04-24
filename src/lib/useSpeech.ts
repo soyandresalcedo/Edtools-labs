@@ -237,13 +237,11 @@ function kokoroLoadAttempts(): Array<{ device: "webgpu" | "wasm"; dtype: KokoroD
 }
 
 export function useSpeech(): UseSpeech {
-  // UX: si el navegador soporta Web Speech, la app debe ser usable inmediatamente.
-  const [status, setStatus] = useState<SpeechStatus>(() =>
-    hasSpeechSynthesis() ? "ready" : "unavailable",
-  );
-  const [engine, setEngine] = useState<SpeechEngine>(() =>
-    hasSpeechSynthesis() ? "webspeech" : "none",
-  );
+  // IMPORTANTE (SSR/Hydration): el primer render debe ser idéntico en server y client.
+  // No podemos depender de `window` en inicializadores de useState, o React/Next
+  // va a detectar mismatch y re-renderizar todo en cliente (lento en móvil).
+  const [status, setStatus] = useState<SpeechStatus>("loading");
+  const [engine, setEngine] = useState<SpeechEngine>("none");
   const [phase, setPhase] = useState<SpeechPhase>("idle");
   const [kokoroStatus, setKokoroStatus] = useState<KokoroStatus>("idle");
   const [kokoroProgress, setKokoroProgress] = useState<number | null>(null);
@@ -274,6 +272,17 @@ export function useSpeech(): UseSpeech {
     engineRef.current = engine;
     statusRef.current = status;
   }, [engine, status]);
+
+  // Habilita Web Speech inmediatamente *después* del mount (evita hydration mismatch).
+  useEffect(() => {
+    if (!hasSpeechSynthesis()) {
+      setEngine("none");
+      setStatus("unavailable");
+      return;
+    }
+    setEngine("webspeech");
+    setStatus("ready");
+  }, []);
 
   const setSpeaking = useCallback((value: boolean) => {
     isSpeakingRef.current = value;
