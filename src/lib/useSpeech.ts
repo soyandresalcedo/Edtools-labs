@@ -28,17 +28,18 @@ const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const DEFAULT_KOKORO_VOICE: KokoroVoiceId = "af_heart";
 
 // #region debug log
-function dbg(location: string, message: string, data: Record<string, unknown> = {}, hypothesisId = "H1"): void {
-  try {
-    fetch('http://127.0.0.1:7478/ingest/0820f258-432e-46d9-aa71-6550b473722b', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '29030a' },
-      body: JSON.stringify({ sessionId: '29030a', runId: 'initial', hypothesisId, location, message, data, timestamp: Date.now() }),
-      keepalive: true,
-    }).catch(() => {});
-  } catch {
-    // ignore
-  }
+// NOTE: nunca apuntes a localhost desde el cliente: en móviles/HTTPS túneles
+// genera ruido (y falsos "failed to load") sin aportar valor. Si necesitas
+// trazas, usa `console.debug` o el endpoint de debug del app (no hardcodear IPs).
+function dbg(
+  location: string,
+  message: string,
+  data: Record<string, unknown> = {},
+  hypothesisId = "H1",
+): void {
+  if (process.env.NODE_ENV !== "development") return;
+  // eslint-disable-next-line no-console
+  console.debug(`[speech:dbg] ${hypothesisId} ${location} — ${message}`, data);
 }
 // #endregion
 
@@ -64,6 +65,28 @@ function formatInitError(err: unknown): string {
     return JSON.stringify(err);
   } catch {
     return String(err);
+  }
+}
+
+const KOKORO_PRETRAINED_TIMEOUT_MS = 25_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        t = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${ms}ms`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (t) clearTimeout(t);
   }
 }
 
@@ -398,10 +421,14 @@ export function useSpeech(): UseSpeech {
           dbg("useSpeech.ts:init", "attempt start", { device, dtype }, "H4");
           // #endregion
           try {
-            const tts = await mod.KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-              dtype,
-              device,
-            });
+            const tts = await withTimeout(
+              mod.KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+                dtype,
+                device,
+              }),
+              KOKORO_PRETRAINED_TIMEOUT_MS,
+              `KokoroTTS.from_pretrained(${device}/${dtype})`,
+            );
             if (disposed) return;
             ttsRef.current = tts;
             setEngine("kokoro");
