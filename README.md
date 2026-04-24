@@ -30,9 +30,15 @@ En el teléfono prueba también `/poc/tilt` (tilt / sensores).
 - **Local:** http://localhost:3000 — chip o pregunta en inglés de cinemática.
 - **Móvil (HTTP):** usa la IP que imprime la consola; si el firewall del Mac
   bloquea el puerto 3000, permite conexiones entrantes.
-- **Sensores / HTTPS:** si `DeviceOrientation` no emite eventos con
-  `http://192.168.x.x`, usa un túnel con HTTPS (p. ej. Cloudflare Tunnel hacia
-  `http://127.0.0.1:3000`).
+- **Sensores / HTTPS:** en muchos móviles `DeviceOrientation` solo está disponible
+  en *secure context*; con `http://192.168.x.x` el navegador puede no exponer
+  siquiera el API. Úsalo vía túnel HTTPS (recomendado: **Cloudflare quick tunnel**):
+  1. Deja `pnpm dev` en marcha (mira en consola si usas el puerto 3000 o 3001).
+  2. `cloudflared tunnel --url http://127.0.0.1:3000` (cambia a `:3001` si Next
+     eligió otro puerto).
+  3. Abre en el teléfono la URL `https://….trycloudflare.com` que imprime el
+     comando, y añade `/poc/tilt` para la PoC de sensores. La URL **cambia** en
+     cada arranque del túnel. Alternativa sin instalar: `npx localtunnel@2.0.2 --port 3000`.
 
 Variables de entorno: copia `.env.example` a `.env.local`.
 
