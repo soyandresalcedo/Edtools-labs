@@ -272,6 +272,9 @@ export function AgentSidebar({
             Loading Kokoro in the background. You can keep using the app with your
             system voice in the meantime.
           </p>
+          <p className="mb-1 text-[10px] text-muted-foreground/90">
+            First load on mobile can take a couple minutes (large model download).
+          </p>
           {typeof kokoroProgress === "number" ? (
             <p className="text-[10px] text-muted-foreground/90">
               Progress: <strong>{Math.round(kokoroProgress * 100)}%</strong>

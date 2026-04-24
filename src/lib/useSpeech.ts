@@ -70,8 +70,16 @@ function formatInitError(err: unknown): string {
   }
 }
 
-const KOKORO_PRETRAINED_TIMEOUT_MS = 25_000;
-const KOKORO_INIT_BUDGET_MS = 60_000;
+function kokoroTimeoutMs(): number {
+  // La primera carga puede ser muy pesada en móvil (descarga + parse + compile).
+  // Preferimos tolerancia alta porque la UI ya funciona con Web Speech.
+  return isMobileLike() ? 120_000 : 45_000;
+}
+
+function kokoroInitBudgetMs(): number {
+  // Solo para evitar cuelgues silenciosos. Si hay progreso, dejamos seguir.
+  return isMobileLike() ? 240_000 : 90_000;
+}
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -474,14 +482,18 @@ export function useSpeech(): UseSpeech {
         let lastErr: unknown;
         const attempts = kokoroLoadAttempts();
         const initStartedAt = performance.now();
+        let lastProgressAt = performance.now();
         // #region debug log
         dbg("useSpeech.ts:init", "load attempts plan", { attempts, count: attempts.length }, "H4");
         // #endregion
         for (const { device, dtype } of attempts) {
           if (disposed) return;
-          if (performance.now() - initStartedAt > KOKORO_INIT_BUDGET_MS) {
+          const budgetMs = kokoroInitBudgetMs();
+          const now = performance.now();
+          const recentlyProgressing = now - lastProgressAt < 12_000;
+          if (!recentlyProgressing && now - initStartedAt > budgetMs) {
             throw new Error(
-              `Kokoro: exceeded init budget (${KOKORO_INIT_BUDGET_MS}ms)`,
+              `Kokoro: exceeded init budget (${budgetMs}ms)`,
             );
           }
           // #region debug log
@@ -502,6 +514,7 @@ export function useSpeech(): UseSpeech {
                       total > 0
                     ) {
                       const frac = Math.max(0, Math.min(1, loaded / total));
+                      lastProgressAt = performance.now();
                       if (!disposed) setKokoroProgress(frac);
                     }
                   } catch {
@@ -509,7 +522,7 @@ export function useSpeech(): UseSpeech {
                   }
                 },
               }),
-              KOKORO_PRETRAINED_TIMEOUT_MS,
+              kokoroTimeoutMs(),
               `KokoroTTS.from_pretrained(${device}/${dtype})`,
             );
             if (disposed) return;
