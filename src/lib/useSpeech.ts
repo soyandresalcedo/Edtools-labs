@@ -69,6 +69,7 @@ function formatInitError(err: unknown): string {
 }
 
 const KOKORO_PRETRAINED_TIMEOUT_MS = 25_000;
+const KOKORO_INIT_BUDGET_MS = 60_000;
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -412,11 +413,17 @@ export function useSpeech(): UseSpeech {
 
         let lastErr: unknown;
         const attempts = kokoroLoadAttempts();
+        const initStartedAt = performance.now();
         // #region debug log
         dbg("useSpeech.ts:init", "load attempts plan", { attempts, count: attempts.length }, "H4");
         // #endregion
         for (const { device, dtype } of attempts) {
           if (disposed) return;
+          if (performance.now() - initStartedAt > KOKORO_INIT_BUDGET_MS) {
+            throw new Error(
+              `Kokoro: exceeded init budget (${KOKORO_INIT_BUDGET_MS}ms)`,
+            );
+          }
           // #region debug log
           dbg("useSpeech.ts:init", "attempt start", { device, dtype }, "H4");
           // #endregion
