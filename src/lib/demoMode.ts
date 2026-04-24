@@ -40,6 +40,28 @@ export function pickDemoScene(question: string): DemoScene {
   if (/position[-\s]*time/.test(q)) return "mru";
   if (/\bx[-\s]*t\b/.test(q) && /graph/.test(q)) return "mru";
 
+  // Spanish (normalize() already strips accents)
+  if (/movimiento\s*uniformemente\s*acelerado|mruv|aceleracion\s*uniforme/.test(q)) {
+    return "mrua";
+  }
+  if (/caida\s*libre|gravedad|soltar\s*vertical|objeto\s*en\s*caida/.test(q)) {
+    return "freefall";
+  }
+  if (
+    /movimiento\s*rectilineo\s*uniforme|rectilineo\s*uniforme|grafica.*posicion.*tiempo|posicion.*tiempo.*(auto|coche|carro)/.test(
+      q,
+    )
+  ) {
+    return "mru";
+  }
+  if (
+    /rapidez.*velocidad|velocidad.*rapidez|escalar.*vector|vector.*escalar|misma\s+rapidez/.test(
+      q,
+    )
+  ) {
+    return "v_vs_a";
+  }
+
   return "v_vs_a";
 }
 

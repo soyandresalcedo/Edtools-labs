@@ -410,6 +410,7 @@ export function AgentSidebar({
 
       <div className="flex flex-col gap-3 border-t bg-background px-4 py-3">
         <QuestionChips
+          lang={lang}
           onSelect={(q) => {
             onUserGesture();
             onAsk(q);
