@@ -24,8 +24,23 @@ pnpm install
 pnpm dev
 ```
 
-Open http://localhost:3000 and click a chip, or type your own kinematics
-question in English.
+Al arrancar se listan URLs en **LAN** (misma Wi‑Fi) para abrir en el móvil.
+En el teléfono prueba también `/poc/tilt` (tilt / sensores).
+
+- **Local:** http://localhost:3000 — chip o pregunta en inglés de cinemática.
+- **Móvil (HTTP):** usa la IP que imprime la consola; si el firewall del Mac
+  bloquea el puerto 3000, permite conexiones entrantes.
+- **Sensores / HTTPS:** si `DeviceOrientation` no emite eventos con
+  `http://192.168.x.x`, usa un túnel con HTTPS (p. ej. Cloudflare Tunnel hacia
+  `http://127.0.0.1:3000`).
+
+Variables de entorno: copia `.env.example` a `.env.local`.
+
+```bash
+pnpm build          # producción (incluye assets TTS en public/vendors-tts)
+pnpm start          # sirve en 0.0.0.0
+pnpm preview        # build + start
+```
 
 ## Demo mode (no API key required)
 

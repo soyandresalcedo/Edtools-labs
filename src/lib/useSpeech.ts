@@ -367,9 +367,21 @@ export function useSpeech(): UseSpeech {
         if (disposed) return;
 
         // #region debug log
-        dbg("useSpeech.ts:init", "importing kokoro-js", {}, "H1");
+        dbg("useSpeech.ts:init", "importing kokoro-js (static /vendors-tts)", {}, "H1");
         // #endregion
-        const mod = await import("kokoro-js");
+        // Carga nativa: evita que Webpack empaquete Kokoro+ORT (new URL relative a import.meta
+        // rompe con factory undefined). Assets en public/ vía scripts/copy-tts-assets.cjs.
+        const nextBase = (
+          window as { __NEXT_DATA__?: { basePath?: string } }
+        ).__NEXT_DATA__?.basePath;
+        const kokoroPath = `${nextBase ?? ""}/vendors-tts/kokoro.web.js`.replace(
+          /\/\//g,
+          "/",
+        );
+        const mod = (await import(
+          /* webpackIgnore: true */
+          new URL(kokoroPath, window.location.origin).href
+        )) as typeof import("kokoro-js");
         if (disposed) return;
         // #region debug log
         dbg("useSpeech.ts:init", "kokoro-js imported", { hasKokoroTTS: !!mod.KokoroTTS, modKeys: Object.keys(mod).slice(0, 10) }, "H1");

@@ -3,6 +3,9 @@ node_modules
 /.next
 /out
 
+# TTS: generado con pnpm run copy-tts-assets (Kokoro + ORT, ~40MB)
+/public/vendors-tts
+
 # env files
 .env*.local
 

@@ -48,15 +48,22 @@ export default function TiltPoc() {
   });
   const [httpsOk, setHttpsOk] = useState<boolean | null>(null);
   const [events, setEvents] = useState(0);
+  const [origin, setOrigin] = useState<string | null>(null);
+  const [isLanHttp, setIsLanHttp] = useState(false);
 
   const lastTs = useRef(0);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const isLocalhost =
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1";
+    setOrigin(window.location.origin);
+    const h = window.location.hostname;
+    const isLocalhost = h === "localhost" || h === "127.0.0.1";
     setHttpsOk(window.location.protocol === "https:" || isLocalhost);
+    const isPrivateLan =
+      /^10\./.test(h) ||
+      /^192\.168\./.test(h) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(h);
+    setIsLanHttp(window.location.protocol === "http:" && isPrivateLan);
     if (!hasOrientationAPI()) setPerm("unsupported");
   }, []);
 
@@ -125,6 +132,15 @@ export default function TiltPoc() {
           Lee <code>DeviceOrientation</code> para validar si el modo lab es
           viable en tu dispositivo.
         </p>
+        <p className="pt-1 text-[11px] text-muted-foreground">
+          <strong>Red / móvil:</strong> el dev server escucha en{" "}
+          <code>0.0.0.0</code> (ver <code>pnpm dev</code>). En el teléfono, misma
+          Wi‑Fi, abre <code className="break-all">http://&lt;IP-de-tu-PC&gt;:3000</code>{" "}
+          <code className="break-all">/poc/tilt</code>. Origen actual:{" "}
+          <code className="break-all">
+            {origin ?? "—"}
+          </code>
+        </p>
       </header>
 
       <section className="rounded-lg border p-4">
@@ -144,7 +160,18 @@ export default function TiltPoc() {
             Requiere permiso explícito (iOS):{" "}
             <strong>{needsIOSPermission() ? "Sí" : "No"}</strong>
           </li>
+          <li>
+            HTTP en LAN privada:{" "}
+            <strong>{isLanHttp ? "Sí (puede limitar sensores)" : "N/A o no"}</strong>
+          </li>
         </ul>
+        {isLanHttp ? (
+          <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
+            Varios navegadores tratan <code>http://192.168.…</code> como contexto
+            poco fiable. Si no ves eventos, prueba un túnel con HTTPS (p. ej.{" "}
+            <code>cloudflared tunnel --url http://127.0.0.1:3000</code>).
+          </p>
+        ) : null}
       </section>
 
       <section className="rounded-lg border p-4">

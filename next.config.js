@@ -10,7 +10,8 @@ const transformersWeb = path.resolve(
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: false,
-  transpilePackages: ["@huggingface/transformers", "kokoro-js"],
+  // kokoro: import en runtime desde /vendors-tts (ver scripts/copy-tts-assets.cjs)
+  transpilePackages: ["@huggingface/transformers"],
   experimental: {
     esmExternals: "loose",
   },
