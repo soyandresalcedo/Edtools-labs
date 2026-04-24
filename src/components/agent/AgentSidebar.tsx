@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Plus,
   PanelLeftClose,
@@ -24,7 +24,6 @@ import type {
   AgentStatus as AgentStatusValue,
   LogEntry,
 } from "@/lib/useLessonStream";
-import { useTiltEvents, type TiltEvent } from "@/lib/useTiltEvents";
 import {
   KOKORO_SKIPPED_MOBILE,
   type KokoroVoiceId,
@@ -33,53 +32,17 @@ import {
   type SpeechPhase,
   type SpeechStatus,
 } from "@/lib/useSpeech";
+import type { AppLang } from "@/lib/lang";
+import { readLabProgress } from "@/lib/progressStore";
+import { LAB_TOPIC_VALUES } from "@/prompts/lab-recipes";
 
-function buildHandoffContext(entries: LogEntry[]): string {
-  const tail = entries.slice(-8);
-  return tail
-    .map((e) => {
-      const role = e.role === "user" ? "user" : "agent";
-      const text = e.text.replace(/\s+/g, " ").trim();
-      return `${role}: ${text}`;
-    })
-    .join("\n");
-}
-
-function dirLabel(d: TiltEvent["direction"]): string {
-  switch (d) {
-    case "right":
-      return "derecha";
-    case "left":
-      return "izquierda";
-    case "forward":
-      return "adelante";
-    case "back":
-      return "atrás";
-  }
-}
-
-function buildSensorSummary(events: TiltEvent[]): string {
-  const parts = events.slice(-6).map((e) => {
-    const deg =
-      Math.abs(e.maxGamma) >= Math.abs(e.maxBeta)
-        ? Math.round(Math.abs(e.maxGamma))
-        : Math.round(Math.abs(e.maxBeta));
-    return `${dirLabel(e.direction)} (~${deg}°, ${e.holdMs} ms)`;
-  });
-  return parts.join(" → ");
-}
-
-type LabMission = {
-  id: string;
-  direction: TiltEvent["direction"];
-  label: string;
+const TOPIC_SHORT: Record<string, Record<AppLang, string>> = {
+  "velocity-direction": { en: "vel·dir", es: "vel·dir" },
+  "mru-constant-velocity": { en: "MRU", es: "MRU" },
+  "mrua-acceleration": { en: "MRUA", es: "MRUA" },
+  "free-fall": { en: "fall", es: "caída" },
+  "displacement-vs-distance": { en: "Δx vs d", es: "Δx vs d" },
 };
-
-const LAB_MISSIONS: LabMission[] = [
-  { id: "right", direction: "right", label: "Inclina a la DERECHA" },
-  { id: "left", direction: "left", label: "Inclina a la IZQUIERDA" },
-  { id: "forward", direction: "forward", label: "Inclina hacia ADELANTE" },
-];
 
 export function AgentSidebar({
   status,
@@ -98,6 +61,8 @@ export function AgentSidebar({
   voice,
   setVoice,
   voices,
+  lang,
+  setLang,
   onAsk,
   onAskLab,
   onStop,
@@ -107,6 +72,7 @@ export function AgentSidebar({
   onUserGesture,
   showLabReturn = false,
   onReturnToTeach,
+  patchLabSuggestion,
 }: {
   status: AgentStatusValue;
   caption: string;
@@ -124,12 +90,15 @@ export function AgentSidebar({
   voice: KokoroVoiceId;
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
+  lang: AppLang;
+  setLang: (lang: AppLang) => void;
   onAsk: (q: string) => void;
   onAskLab: (input: {
     question: string;
     handoffContext?: string;
     sensorSummary?: string;
-  }) => void;
+    predictionChoice?: string;
+  }) => void | Promise<void>;
   onStop: () => void;
   onNewLesson: () => void;
   onCollapse?: () => void;
@@ -137,42 +106,39 @@ export function AgentSidebar({
   onUserGesture: () => void;
   showLabReturn?: boolean;
   onReturnToTeach?: () => void;
+  patchLabSuggestion: (
+    id: string,
+    patch: Partial<
+      Pick<
+        Extract<LogEntry, { role: "lab_suggestion" }>,
+        "state" | "predictionChoice"
+      >
+    >,
+  ) => void;
 }) {
   const isBusy =
     status === "thinking" || status === "speaking" || status === "drawing";
 
-  const tilt = useTiltEvents({ threshold: 15, minHoldMs: 300 });
-  const [labOpen, setLabOpen] = useState(false);
-  const [missionIdx, setMissionIdx] = useState(0);
-  const [labEvents, setLabEvents] = useState<TiltEvent[]>([]);
-  const completed = missionIdx >= LAB_MISSIONS.length;
-
+  const [progressSnap, setProgressSnap] = useState(() => readLabProgress());
   useEffect(() => {
-    if (!labOpen) return;
-    if (!tilt.lastEvent) return;
-    const expected = LAB_MISSIONS[missionIdx];
-    if (!expected) return;
-    if (tilt.lastEvent.direction !== expected.direction) return;
-    setLabEvents((prev) => [...prev, tilt.lastEvent!]);
-    setMissionIdx((i) => i + 1);
-  }, [labOpen, tilt.lastEvent, missionIdx]);
+    setProgressSnap(readLabProgress());
+  }, [log]);
 
-  useEffect(() => {
-    if (!labOpen) return;
-    if (!completed) return;
-    if (labEvents.length === 0) return;
-    const handoffContext = buildHandoffContext(log);
-    const sensorSummary = buildSensorSummary(labEvents);
-    const question = [
-      "Lab mode handoff:",
-      `sensorSummary: ${sensorSummary}`,
-      "In 2–3 short Spanish sentences, acknowledge the motion and connect it to velocity direction/sign.",
-      "End with 1 short question.",
-      "Use only the speak tool; do not draw.",
-    ].join("\n");
-    onUserGesture();
-    onAskLab({ question, handoffContext, sensorSummary });
-  }, [completed, labEvents, labOpen, log, onAskLab, onUserGesture]);
+  const progressChips = useMemo(() => {
+    return LAB_TOPIC_VALUES.map((topic) => {
+      const n = progressSnap[topic]?.completions ?? 0;
+      if (n === 0) return null;
+      const short = TOPIC_SHORT[topic]?.[lang] ?? topic.slice(0, 6);
+      return (
+        <span
+          key={topic}
+          className="inline-flex items-center rounded-full border bg-muted/50 px-2 py-0.5 text-[10px] text-muted-foreground"
+        >
+          {short} · {n}
+        </span>
+      );
+    }).filter(Boolean);
+  }, [progressSnap, lang]);
 
   const voiceLabel =
     speechStatus === "loading"
@@ -214,6 +180,26 @@ export function AgentSidebar({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <div className="mr-1 flex rounded-md border p-0.5">
+            <Button
+              type="button"
+              variant={lang === "en" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => setLang("en")}
+            >
+              EN
+            </Button>
+            <Button
+              type="button"
+              variant={lang === "es" ? "secondary" : "ghost"}
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              onClick={() => setLang("es")}
+            >
+              ES
+            </Button>
+          </div>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -322,9 +308,17 @@ export function AgentSidebar({
         <div className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
           {kokoroInitError === KOKORO_SKIPPED_MOBILE ? (
             <p className="mb-2">
-              En móvil usamos la <strong>voz del sistema en español</strong> (Lab)
-              o en inglés (lección) sin cargar Kokoro. Así la app responde al
-              instante.
+              {lang === "es" ? (
+                <>
+                  En móvil usamos la <strong>voz del sistema</strong> (idioma según
+                  selector EN/ES) sin cargar Kokoro.
+                </>
+              ) : (
+                <>
+                  On mobile we use your <strong>system voice</strong> (language
+                  follows EN/ES toggle) without loading Kokoro.
+                </>
+              )}
             </p>
           ) : (
             <>
@@ -368,11 +362,21 @@ export function AgentSidebar({
         ) : null}
       </div>
 
+      {progressChips.length > 0 ? (
+        <div className="flex flex-wrap gap-1 border-b px-4 py-2">
+          <span className="w-full text-[10px] font-medium uppercase text-muted-foreground">
+            {lang === "es" ? "Labs completados" : "Labs completed"}
+          </span>
+          {progressChips}
+        </div>
+      ) : null}
+
       {showLabReturn && onReturnToTeach ? (
         <div className="border-b border-primary/20 bg-primary/5 px-4 py-2">
           <p className="mb-2 text-[11px] leading-snug text-foreground">
-            Lab completado. Vuelve a la lección en inglés: el contexto del lab se
-            envía al tutor automáticamente.
+            {lang === "es"
+              ? "Lab listo. Si no avanzó solo, pulsa para enviar el contexto al tutor."
+              : "Lab ready. If the lesson did not continue automatically, tap to send context to the tutor."}
           </p>
           <Button
             type="button"
@@ -384,102 +388,23 @@ export function AgentSidebar({
             }}
             disabled={isBusy}
           >
-            Volver a la lección
+            {lang === "es" ? "Volver a la lección" : "Return to lesson"}
           </Button>
         </div>
       ) : null}
 
       <Separator />
 
-      {labOpen ? (
-        <div className="border-b bg-background px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Lab (sensor)
-              </p>
-              <p className="text-[11px] text-muted-foreground">
-                {completed
-                  ? "Misión completa — enviando handoff…"
-                  : `Paso ${missionIdx + 1}/${LAB_MISSIONS.length}`}
-              </p>
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2 text-xs"
-              onClick={() => {
-                setLabOpen(false);
-                setMissionIdx(0);
-                setLabEvents([]);
-                tilt.resetEvents();
-              }}
-            >
-              Cerrar
-            </Button>
-          </div>
-
-          <div className="mt-3 flex flex-col gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs"
-              onClick={() => tilt.enable()}
-              disabled={tilt.perm === "granted" || tilt.perm === "unsupported"}
-            >
-              {tilt.perm === "granted" ? "Motion activo" : "Enable motion"}
-            </Button>
-            <div className="text-[11px] text-muted-foreground">
-              permiso: <code>{tilt.perm}</code> · eventos:{" "}
-              <code>{tilt.events.length}</code>
-            </div>
-
-            {!completed ? (
-              <div className="rounded-md border bg-muted/20 px-3 py-2 text-sm">
-                <div className="font-medium">
-                  {LAB_MISSIONS[missionIdx]?.label ?? "—"}
-                </div>
-                <div className="mt-1 text-[11px] text-muted-foreground">
-                  Mantén &gt;15° por ~0.3s.
-                </div>
-              </div>
-            ) : null}
-
-            {labEvents.length > 0 ? (
-              <div className="text-[11px] text-muted-foreground">
-                sensorSummary: <code>{buildSensorSummary(labEvents)}</code>
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : (
-        <div className="border-b bg-background px-4 py-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 w-full text-xs"
-            onClick={() => {
-              onUserGesture();
-              setLabOpen(true);
-              setMissionIdx(0);
-              setLabEvents([]);
-              tilt.resetEvents();
-            }}
-            disabled={isBusy || speechStatus !== "ready"}
-          >
-            Start Lab (tilt mission)
-          </Button>
-        </div>
-      )}
-
       <div className="flex-1 min-h-0">
         <ConversationLog
           entries={log}
           currentCaption={caption}
           isSpeaking={isAudioSpeaking}
+          lang={lang}
+          agentStatus={status}
+          patchLabSuggestion={patchLabSuggestion}
+          askLab={onAskLab}
+          unlockAudio={onUserGesture}
         />
       </div>
 

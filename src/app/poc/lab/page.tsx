@@ -1,6 +1,10 @@
 "use client";
 
 /**
+ * @deprecated Diagnóstico manual solamente. El flujo real de lab está **inline**
+ * en la lección principal (`/`): tool `suggest_lab` + `LabCard` en el chat.
+ * Conservamos esta página para depurar sensores y `/api/lesson` aisladamente.
+ *
  * PoC 2: "Lab handshake" (sensores → resumen → agente).
  *
  * Objetivo: demostrar el "cambio natural" Teach → Lab sin tocar el flujo real.

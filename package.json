@@ -11,7 +11,8 @@
     "build": "node scripts/copy-tts-assets.cjs && next build",
     "start": "node scripts/copy-tts-assets.cjs && next start -H 0.0.0.0",
     "preview": "pnpm build && pnpm start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -49,6 +50,7 @@
     "eslint-config-next": "^14.2.25",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.17",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^3.0.5"
   }
 }

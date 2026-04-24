@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Tool } from "@anthropic-ai/sdk/resources/messages";
+import { LAB_TOPIC_VALUES } from "@/prompts/lab-recipes";
 
 export const VectorKind = z.enum([
   "velocity",
@@ -14,10 +15,24 @@ export const LineStyle = z.enum(["solid", "dashed"]);
 export const ToolInputs = {
   clear_canvas: z.object({}).strict(),
 
-  /** Speech variant: one short caption before each 1–3 drawing steps (syncs with diagrams; Day 5 = TTS). */
+  /** Speech variant: short caption; language follows system OUTPUT LANGUAGE. */
   speak: z
     .object({
       text: z.string().min(10).max(280),
+    })
+    .strict(),
+
+  suggest_lab: z
+    .object({
+      topic: z.enum(LAB_TOPIC_VALUES),
+      reason: z.string().min(10).max(200),
+      predict: z
+        .object({
+          question: z.string().min(10).max(200),
+          options: z.array(z.string().min(2).max(80)).min(2).max(3),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
 
@@ -79,17 +94,50 @@ export const TOOLS: Tool[] = [
   {
     name: "speak",
     description:
-      "Say ONE short sentence in Latin American Spanish (10–280 chars). Use BEFORE each group of 1–3 drawing tools to preview or summarize what the student will see next. Never use for long prose—only step captions. Alternate speak and draw throughout the lesson.",
+      "Say ONE short sentence (10–280 chars) in the OUTPUT LANGUAGE from the system prompt. Use BEFORE each group of 1–3 drawing tools to preview or summarize what the student will see. Alternate speak and draw. For the closing line, prefer a Socratic question unless you are about to call suggest_lab (then speak AFTER suggest_lab as the true final line).",
     input_schema: {
       type: "object",
       properties: {
         text: {
           type: "string",
           description:
-            "Single short sentence, Latin American Spanish, 10–280 characters. No LaTeX.",
+            "Single short sentence, 10–280 characters, classroom tone. No LaTeX.",
         },
       },
       required: ["text"],
+    },
+  },
+  {
+    name: "suggest_lab",
+    description:
+      "Offer a short phone-sensor lab card in the chat. Call when tilting would deepen intuition (velocity direction, MRU, MRUA, free fall, displacement vs distance). Include predict when you want a hypothesis step (2–3 short options). The client runs the sensor recipe locally; do NOT invent sensor numbers. After suggest_lab, you MUST still end the turn with a final speak Socratic question OR brief invitation to try the lab card.",
+    input_schema: {
+      type: "object",
+      properties: {
+        topic: {
+          type: "string",
+          enum: [...LAB_TOPIC_VALUES],
+          description: "Which lab recipe to run on the device.",
+        },
+        reason: {
+          type: "string",
+          description: "Why this lab fits the current kinematics point (student-facing).",
+        },
+        predict: {
+          type: "object",
+          properties: {
+            question: { type: "string" },
+            options: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 2,
+              maxItems: 3,
+            },
+          },
+          required: ["question", "options"],
+        },
+      },
+      required: ["topic", "reason"],
     },
   },
   {
@@ -171,4 +219,3 @@ export const TOOLS: Tool[] = [
     },
   },
 ];
-

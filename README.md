@@ -17,6 +17,31 @@ outside tools is ignored—only `speak` plus drawing tools reach the UI.
 The UI exposes preset question chips for the supported topics and a
 **New lesson** button that clears the canvas.
 
+### Inline sensor lab (`suggest_lab`)
+
+The tutor can emit a **`suggest_lab`** tool call with a `topic` and short
+`reason`. The client shows an interactive **Lab card** inside the conversation
+(not a separate sidebar flow). Recipes per topic live in
+[`src/prompts/lab-recipes.ts`](src/prompts/lab-recipes.ts). Optional **`predict`**
+(2–3 options) runs a *Predict → tilt → reflect* cycle before calling the API in
+`lab` mode. After the lab, the app **auto-continues** the lesson in `teach`
+mode with a handoff context (same language as the lesson).
+
+**Language:** use the **EN / ES** toggle in the sidebar. Teach and lab prompts
+and Web Speech follow that choice (`lang` is sent to `/api/lesson`).
+
+**Simulator:** if the device has no orientation API or permission is denied, a
+**drag slider** can stand in for tilt (`useTilt` + `useSimulatedTiltEvents`).
+
+**Progress:** lab completions per topic are stored in `localStorage` and sent
+as `labProgressSummary` so the model can vary suggestions.
+
+### Tests
+
+```bash
+pnpm test   # vitest (sensor summary + lab recipes)
+```
+
 ## Development
 
 ```bash
@@ -25,7 +50,8 @@ pnpm dev
 ```
 
 On startup the console prints **LAN** URLs (same Wi‑Fi) for testing on a phone.
-Also try `/poc/tilt` on the device (tilt / sensor PoC).
+Also try `/poc/tilt` on the device (tilt / sensor PoC). The older
+`/poc/lab` page is **diagnostic only**; the real lab UX is inline on `/`.
 
 - **Local:** http://localhost:3000 — use a chip or type a kinematics question in English.
 - **Phone over HTTP:** use the IP printed in the console; if your Mac firewall
@@ -60,7 +86,9 @@ DEMO_MODE=1
 Four canned scenes are routed from the question text:
 
 - Generic / "speed vs velocity" → scene 1: a ball with velocity and
-  acceleration arrows.
+  acceleration arrows, then an inline **`suggest_lab`** card (with `predict`)
+  when `DEMO_MODE=1` (language follows `lang` in the request body; demo uses
+  the sidebar EN/ES toggle via the same client `lang` state).
 - "MRU", "uniform motion", "position–time graph", "constant velocity" →
   scene 2: road, car and x(t) straight line.
 - "MRUA", "uniformly accelerated", "v–t graph" → scene 3: v(t) straight

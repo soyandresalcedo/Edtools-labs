@@ -49,6 +49,9 @@ export default function Home() {
     newLesson,
     showLabReturn,
     returnToTeach,
+    lang,
+    setLang,
+    patchLabSuggestion,
   } = useLessonStream();
 
   const [focusMode, setFocusMode] = useState(false);
@@ -82,13 +85,15 @@ export default function Home() {
           speechStatus={speechStatus}
           speechEngine={speechEngine}
           speechPhase={speechPhase}
-            kokoroStatus={kokoroStatus}
-            kokoroProgress={kokoroProgress}
+          kokoroStatus={kokoroStatus}
+          kokoroProgress={kokoroProgress}
           kokoroInitError={kokoroInitError}
           retryKokoro={retryKokoro}
           voice={voice}
           setVoice={setVoice}
           voices={voices}
+          lang={lang}
+          setLang={setLang}
           onAsk={handleAsk}
           onAskLab={(input) => {
             setMobileOpen(false);
@@ -101,6 +106,7 @@ export default function Home() {
           onUserGesture={unlockAudio}
           showLabReturn={showLabReturn}
           onReturnToTeach={returnToTeach}
+          patchLabSuggestion={patchLabSuggestion}
         />
       </div>
 
@@ -158,6 +164,8 @@ export default function Home() {
             voice={voice}
             setVoice={setVoice}
             voices={voices}
+            lang={lang}
+            setLang={setLang}
             onAsk={handleAsk}
             onAskLab={(input) => {
               setMobileOpen(false);
@@ -169,6 +177,7 @@ export default function Home() {
             onUserGesture={unlockAudio}
             showLabReturn={showLabReturn}
             onReturnToTeach={returnToTeach}
+            patchLabSuggestion={patchLabSuggestion}
           />
         </SheetContent>
       </Sheet>

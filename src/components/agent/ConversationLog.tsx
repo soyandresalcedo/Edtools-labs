@@ -4,15 +4,41 @@ import { useEffect, useRef } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { LogEntry } from "@/lib/useLessonStream";
+import type { AgentStatus } from "@/lib/useLessonStream";
+import type { AppLang } from "@/lib/lang";
+import { LabCard } from "@/components/agent/LabCard";
 
 export function ConversationLog({
   entries,
   currentCaption,
   isSpeaking,
+  lang,
+  agentStatus,
+  patchLabSuggestion,
+  askLab,
+  unlockAudio,
 }: {
   entries: LogEntry[];
   currentCaption: string;
   isSpeaking: boolean;
+  lang: AppLang;
+  agentStatus: AgentStatus;
+  patchLabSuggestion: (
+    id: string,
+    patch: Partial<
+      Pick<
+        Extract<LogEntry, { role: "lab_suggestion" }>,
+        "state" | "predictionChoice"
+      >
+    >,
+  ) => void;
+  askLab: (input: {
+    question: string;
+    handoffContext?: string;
+    sensorSummary?: string;
+    predictionChoice?: string;
+  }) => void | Promise<void>;
+  unlockAudio: () => void;
 }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -41,6 +67,25 @@ export function ConversationLog({
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-4 px-4 py-4">
         {entries.map((entry, idx) => {
+          if (entry.role === "lab_suggestion") {
+            return (
+              <div key={entry.id} className="flex flex-col items-start">
+                <span className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {lang === "es" ? "Laboratorio" : "Lab"}
+                </span>
+                <LabCard
+                  entry={entry}
+                  lang={lang}
+                  log={entries.slice(0, idx + 1)}
+                  status={agentStatus}
+                  patchLabSuggestion={patchLabSuggestion}
+                  askLab={askLab}
+                  unlockAudio={unlockAudio}
+                />
+              </div>
+            );
+          }
+
           const isLastAgent =
             isSpeaking &&
             entry.role === "agent" &&

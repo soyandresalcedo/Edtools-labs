@@ -12,6 +12,7 @@ export function toolCallToSkeletons(name: ToolName, input: any): any[] {
   switch (name) {
     case "clear_canvas":
     case "speak":
+    case "suggest_lab":
       return [];
 
     case "draw_circle": {

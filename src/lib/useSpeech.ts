@@ -800,10 +800,15 @@ export function useSpeech(): UseSpeech {
     if (!hasSpeechSynthesis()) return;
     await new Promise<void>((resolve) => {
       const utterance = new SpeechSynthesisUtterance(text);
+      const lang = task.webSpeechLang ?? "en-US";
+      utterance.lang = lang;
       utterance.rate = 0.97;
       utterance.pitch = 1.0;
       utterance.volume = 1;
-      const v = preferredVoiceRef.current ?? pickPreferredVoice();
+      const v =
+        pickPreferredVoiceForLang(lang) ??
+        preferredVoiceRef.current ??
+        pickPreferredVoice();
       if (v) utterance.voice = v;
       const start = performance.now();
       utterance.onend = () => {

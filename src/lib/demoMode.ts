@@ -1,3 +1,5 @@
+import type { AppLang } from "@/lib/lang";
+
 type Emit = (event: string, data: unknown) => void;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -42,7 +44,7 @@ export function pickDemoScene(question: string): DemoScene {
 }
 
 /** Scene 1: speed vs acceleration (ball on the ground). Speech Variant interleaved. */
-export async function runVelocityVsAccelerationDemo(emit: Emit) {
+export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
@@ -131,6 +133,38 @@ export async function runVelocityVsAccelerationDemo(emit: Emit) {
     name: "speak",
     input: {
       text: "If the red arrow pointed opposite to the blue one, what would happen to the ball's motion?",
+    },
+  });
+  await sleep(350);
+  const reason =
+    lang === "es"
+      ? "Inclinar el teléfono ayuda a sentir dos direcciones opuestas como dos velocidades distintas."
+      : "Tilting the phone helps you feel two opposite directions as two different velocities.";
+  emit("tool_call", {
+    name: "suggest_lab",
+    input: {
+      topic: "velocity-direction",
+      reason,
+      predict: {
+        question:
+          lang === "es"
+            ? "Antes de inclinar: ¿los dos lados se van a “anular” o van a sentirse opuestos?"
+            : "Before you tilt: will the two sides feel like they cancel, or like opposites?",
+        options:
+          lang === "es"
+            ? ["Se anulan", "Se sienten opuestos", "Será igual"]
+            : ["They cancel out", "They feel opposite", "They feel the same"],
+      },
+    },
+  });
+  await sleep(200);
+  emit("tool_call", {
+    name: "speak",
+    input: {
+      text:
+        lang === "es"
+          ? "Abre la tarjeta del lab cuando quieras; luego dime si tu predicción coincidió."
+          : "Open the lab card when you are ready—then tell me if your prediction matched what you felt.",
     },
   });
 }
@@ -415,7 +449,11 @@ export async function runFreeFallDemo(emit: Emit) {
   });
 }
 
-export async function runDemoMode(emit: Emit, question: string) {
+export async function runDemoMode(
+  emit: Emit,
+  question: string,
+  lang: AppLang = "en",
+) {
   const scene = pickDemoScene(question);
   switch (scene) {
     case "mru":
@@ -429,7 +467,7 @@ export async function runDemoMode(emit: Emit, question: string) {
       break;
     case "v_vs_a":
     default:
-      await runVelocityVsAccelerationDemo(emit);
+      await runVelocityVsAccelerationDemo(emit, lang);
       break;
   }
   emit("done", { ok: true, demo: true, scene });

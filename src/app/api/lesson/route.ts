@@ -1,8 +1,9 @@
 import { anthropic, MODEL } from "@/lib/anthropic";
 import { runDemoMode } from "@/lib/demoMode";
 import { ToolInputs, type ToolName, TOOLS } from "@/lib/tools";
-import { SYSTEM_PROMPT } from "@/prompts/system";
-import { LAB_SYSTEM_PROMPT } from "@/prompts/lab";
+import { buildSystemPrompt } from "@/prompts/system";
+import { buildLabSystemPrompt } from "@/prompts/lab";
+import type { AppLang } from "@/lib/lang";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,13 +14,20 @@ const isDemoMode = () => process.env.DEMO_MODE === "1";
 
 const MAX_QUESTION = 2000;
 const MAX_HANDOFF = 4000;
-const MAX_SENSOR = 1000;
+const MAX_SENSOR = 1200;
+const MAX_PREDICTION = 500;
+const MAX_PROGRESS = 800;
 
 const badRequest = (obj: { error: string; field?: string }) =>
   new Response(JSON.stringify(obj), {
     status: 400,
     headers: { "Content-Type": "application/json" },
   });
+
+function parseLang(v: unknown): AppLang {
+  if (v === "es") return "es";
+  return "en";
+}
 
 export async function POST(req: Request) {
   let body: unknown;
@@ -36,6 +44,9 @@ export async function POST(req: Request) {
     mode?: unknown;
     handoffContext?: unknown;
     sensorSummary?: unknown;
+    lang?: unknown;
+    predictionChoice?: unknown;
+    labProgressSummary?: unknown;
   };
   if (b.question !== undefined && b.question !== null && typeof b.question !== "string") {
     return badRequest({ error: "question must be a string", field: "question" });
@@ -60,6 +71,26 @@ export async function POST(req: Request) {
       field: "sensorSummary",
     });
   }
+  if (
+    b.predictionChoice !== undefined &&
+    b.predictionChoice !== null &&
+    typeof b.predictionChoice !== "string"
+  ) {
+    return badRequest({
+      error: "predictionChoice must be a string",
+      field: "predictionChoice",
+    });
+  }
+  if (
+    b.labProgressSummary !== undefined &&
+    b.labProgressSummary !== null &&
+    typeof b.labProgressSummary !== "string"
+  ) {
+    return badRequest({
+      error: "labProgressSummary must be a string",
+      field: "labProgressSummary",
+    });
+  }
   if (b.mode !== undefined && b.mode !== null && b.mode !== "teach" && b.mode !== "lab") {
     return badRequest({ error: "mode must be teach or lab", field: "mode" });
   }
@@ -68,6 +99,11 @@ export async function POST(req: Request) {
   const mode = b.mode === "lab" ? "lab" : "teach";
   const handoffContext = typeof b.handoffContext === "string" ? b.handoffContext : "";
   const sensorSummary = typeof b.sensorSummary === "string" ? b.sensorSummary : "";
+  const lang = parseLang(b.lang);
+  const predictionChoice =
+    typeof b.predictionChoice === "string" ? b.predictionChoice : "";
+  const labProgressSummary =
+    typeof b.labProgressSummary === "string" ? b.labProgressSummary : "";
 
   if (question.length > MAX_QUESTION) {
     return badRequest({ error: "question exceeds maximum length", field: "question" });
@@ -77,6 +113,12 @@ export async function POST(req: Request) {
   }
   if (sensorSummary.length > MAX_SENSOR) {
     return badRequest({ error: "sensorSummary exceeds maximum length", field: "sensorSummary" });
+  }
+  if (predictionChoice.length > MAX_PREDICTION) {
+    return badRequest({ error: "predictionChoice exceeds maximum length", field: "predictionChoice" });
+  }
+  if (labProgressSummary.length > MAX_PROGRESS) {
+    return badRequest({ error: "labProgressSummary exceeds maximum length", field: "labProgressSummary" });
   }
 
   const encoder = new TextEncoder();
@@ -91,8 +133,7 @@ export async function POST(req: Request) {
 
       try {
         if (isDemoMode()) {
-          // Demo mode stays question-driven; lab wiring is about the real model.
-          await runDemoMode(emit, question);
+          await runDemoMode(emit, question, lang);
           controller.close();
           return;
         }
@@ -106,11 +147,16 @@ export async function POST(req: Request) {
           return;
         }
 
-        const system = mode === "lab" ? LAB_SYSTEM_PROMPT : SYSTEM_PROMPT;
+        const system =
+          mode === "lab" ? buildLabSystemPrompt(lang) : buildSystemPrompt(lang);
         const userMessageParts = [
+          labProgressSummary
+            ? `studentLabProgress (topic → completions):\n${labProgressSummary}\n`
+            : "",
           question || "What is velocity?",
           handoffContext ? `\n\nhandoffContext:\n${handoffContext}` : "",
           sensorSummary ? `\n\nsensorSummary:\n${sensorSummary}` : "",
+          predictionChoice ? `\n\npredictionChoice:\n${predictionChoice}` : "",
         ].filter(Boolean);
 
         const response = anthropic.messages.stream({
@@ -184,4 +230,3 @@ export async function POST(req: Request) {
     },
   });
 }
-

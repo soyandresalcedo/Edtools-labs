@@ -1,7 +1,7 @@
 "use client";
 
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   buildElementsFromSkeletons,
@@ -29,6 +29,16 @@ import {
   type SpeechPhase,
   type SpeechStatus,
 } from "@/lib/useSpeech";
+import type { AppLang } from "@/lib/lang";
+import {
+  inferDefaultLang,
+  readStoredLang,
+  writeStoredLang,
+  webSpeechLocaleForLang,
+} from "@/lib/lang";
+import type { LabTopic } from "@/prompts/lab-recipes";
+import { isLabTopic } from "@/prompts/lab-recipes";
+import { formatProgressForPrompt, readLabProgress } from "@/lib/progressStore";
 
 const STEP_DELAY_MS = 60;
 
@@ -40,9 +50,27 @@ export type AgentStatus =
   | "done"
   | "error";
 
+export type LabSuggestionState =
+  | "pending"
+  | "predicting"
+  | "running"
+  | "reflecting"
+  | "done"
+  | "skipped";
+
 export type LogEntry =
   | { role: "user"; text: string; ts: number }
-  | { role: "agent"; text: string; ts: number };
+  | { role: "agent"; text: string; ts: number }
+  | {
+      role: "lab_suggestion";
+      id: string;
+      ts: number;
+      topic: LabTopic;
+      reason: string;
+      predict?: { question: string; options: string[] };
+      state: LabSuggestionState;
+      predictionChoice?: string;
+    };
 
 type SSEEvent = { event: string; data: any };
 
@@ -127,16 +155,28 @@ export interface UseLessonStream {
   voice: KokoroVoiceId;
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
+  lang: AppLang;
+  setLang: (lang: AppLang) => void;
   ask(question: string): Promise<void>;
   askLab(input: {
     question: string;
     handoffContext?: string;
     sensorSummary?: string;
+    predictionChoice?: string;
   }): Promise<void>;
   stop(): void;
   newLesson(): void;
   showLabReturn: boolean;
   returnToTeach: () => void;
+  patchLabSuggestion: (
+    id: string,
+    patch: Partial<
+      Pick<
+        Extract<LogEntry, { role: "lab_suggestion" }>,
+        "state" | "predictionChoice"
+      >
+    >,
+  ) => void;
 }
 
 export function useLessonStream(): UseLessonStream {
@@ -160,6 +200,21 @@ export function useLessonStream(): UseLessonStream {
   const [appState, setAppStateInternal] = useState<ViewportAppState>(
     DEFAULT_VIEWPORT_STATE,
   );
+  const [lang, setLangState] = useState<AppLang>("en");
+  const langRef = useRef<AppLang>("en");
+
+  useEffect(() => {
+    const stored = readStoredLang();
+    const initial = stored ?? inferDefaultLang();
+    setLangState(initial);
+    langRef.current = initial;
+  }, []);
+
+  const setLang = useCallback((next: AppLang) => {
+    setLangState(next);
+    langRef.current = next;
+    writeStoredLang(next);
+  }, []);
 
   const setAppState = useCallback((s: ViewportAppState) => {
     setAppStateInternal((prev) => {
@@ -207,7 +262,39 @@ export function useLessonStream(): UseLessonStream {
     setStatus("idle");
   }, [stop]);
 
+  const patchLabSuggestion = useCallback(
+    (
+      id: string,
+      patch: Partial<
+        Pick<
+          Extract<LogEntry, { role: "lab_suggestion" }>,
+          "state" | "predictionChoice"
+        >
+      >,
+    ) => {
+      setLog((prev) =>
+        prev.map((e) =>
+          e.role === "lab_suggestion" && e.id === id ? { ...e, ...patch } : e,
+        ),
+      );
+    },
+    [],
+  );
+
   type AskMode = "teach" | "lab";
+
+  const askInternalRef = useRef<
+    | ((
+        mode: AskMode,
+        input: {
+          question: string;
+          handoffContext?: string;
+          sensorSummary?: string;
+          predictionChoice?: string;
+        },
+      ) => Promise<void>)
+    | null
+  >(null);
 
   const askInternal = useCallback(
     async (
@@ -216,6 +303,7 @@ export function useLessonStream(): UseLessonStream {
         question: string;
         handoffContext?: string;
         sensorSummary?: string;
+        predictionChoice?: string;
       },
     ) => {
       const trimmed = input.question.trim();
@@ -224,15 +312,12 @@ export function useLessonStream(): UseLessonStream {
       labReturnContextRef.current = null;
       setShowLabReturn(false);
 
-      // Attempt to unlock audio on the user-initiated action.
       unlockAudio();
-      // #region debug log
-      // useSpeech has the dbg() helper; here we keep it minimal with console so we can verify end-to-end.
       console.debug("[useLessonStream] ask", {
         speechEngine: speech.engine,
         speechStatus: speech.status,
+        lang: langRef.current,
       });
-      // #endregion
 
       stop();
       const controller = new AbortController();
@@ -241,7 +326,20 @@ export function useLessonStream(): UseLessonStream {
       setStatus("thinking");
       setCaption("");
       setApiKeyHint(null);
-      setLog((prev) => [...prev, { role: "user", text: trimmed, ts: Date.now() }]);
+      let logUserText = trimmed;
+      if (mode === "lab") {
+        logUserText =
+          langRef.current === "es" ? "Reflexión del lab" : "Lab reflection";
+      } else if (
+        trimmed.startsWith("We just completed") ||
+        trimmed.startsWith("Acabamos de completar")
+      ) {
+        logUserText =
+          langRef.current === "es"
+            ? "Seguir después del lab"
+            : "Continue after lab";
+      }
+      setLog((prev) => [...prev, { role: "user", text: logUserText, ts: Date.now() }]);
 
       const scene: any[] = [];
       canvasRef.current?.updateScene({ elements: [] });
@@ -255,11 +353,11 @@ export function useLessonStream(): UseLessonStream {
 
       let speakCount = 0;
       let drawToolCalls = 0;
+      let labSuggestCount = 0;
       const labAgentLines: string[] = [];
+      const webLang = webSpeechLocaleForLang(langRef.current);
 
       try {
-        // Excalidraw se carga async (dynamic import ssr:false). Evita "dibujar a la nada"
-        // si el usuario pregunta antes de que `excalidrawAPI` exista.
         {
           const deadline = Date.now() + 4000;
           while (!canvasRef.current && Date.now() < deadline) {
@@ -273,9 +371,12 @@ export function useLessonStream(): UseLessonStream {
             setCaption(msg);
             setStatus("error");
             toast.error("Canvas not ready", { description: msg });
+            if (mode === "lab") throw new Error(msg);
             return;
           }
         }
+
+        const labProgressSummary = formatProgressForPrompt(readLabProgress());
 
         const res = await fetch("/api/lesson", {
           method: "POST",
@@ -285,6 +386,9 @@ export function useLessonStream(): UseLessonStream {
             mode,
             handoffContext: input.handoffContext,
             sensorSummary: input.sensorSummary,
+            lang: langRef.current,
+            predictionChoice: input.predictionChoice,
+            labProgressSummary,
           }),
           signal: controller.signal,
         });
@@ -295,6 +399,7 @@ export function useLessonStream(): UseLessonStream {
           setCaption(msg);
           setStatus("error");
           toast.error("Request failed", { description: msg });
+          if (mode === "lab") throw new Error(msg);
           return;
         }
 
@@ -319,7 +424,7 @@ export function useLessonStream(): UseLessonStream {
               if (mode === "lab") labAgentLines.push(text);
               const p = speech.speakAsync(text, {
                 timeoutMs: 30000,
-                webSpeechLang: mode === "lab" ? "es-419" : "en-US",
+                webSpeechLang: webLang,
               });
               pendingSpeakPromiseRef.current = p;
               void p.then(({ durationMs }) => {
@@ -329,6 +434,34 @@ export function useLessonStream(): UseLessonStream {
                   pendingSpeakPromiseRef.current = null;
                 }
               });
+              continue;
+            }
+
+            if (name === "suggest_lab") {
+              labSuggestCount++;
+              const topic = data.input?.topic;
+              const reason = String(data.input?.reason ?? "");
+              const predict = data.input?.predict as
+                | { question: string; options: string[] }
+                | undefined;
+              if (isLabTopic(topic) && reason.length >= 10) {
+                const id = `lab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                const initialState: LabSuggestionState = predict?.options?.length
+                  ? "predicting"
+                  : "pending";
+                setLog((prev) => [
+                  ...prev,
+                  {
+                    role: "lab_suggestion",
+                    id,
+                    ts: Date.now(),
+                    topic,
+                    reason,
+                    predict,
+                    state: initialState,
+                  },
+                ]);
+              }
               continue;
             }
 
@@ -420,6 +553,7 @@ export function useLessonStream(): UseLessonStream {
               );
             }
             toast.error("Agent error", { description: msg });
+            if (mode === "lab") throw new Error(msg);
             return;
           } else if (event === "done") {
             break;
@@ -428,33 +562,55 @@ export function useLessonStream(): UseLessonStream {
           }
         }
 
-        if (drawToolCalls === 0 && speakCount === 0) {
-          setCaption("No response received. Check the browser console.");
+        if (drawToolCalls === 0 && speakCount === 0 && labSuggestCount === 0) {
+          const msg = "No response received. Check the browser console.";
+          setCaption(msg);
           setStatus("error");
           toast.error("Empty response", {
             description: "The agent returned no tool calls.",
           });
+          if (mode === "lab") throw new Error(msg);
           return;
         }
 
         if (mode === "lab" && speakCount > 0) {
+          const L = langRef.current;
+          const linesLabel =
+            L === "es"
+              ? "Líneas de voz del lab (en orden)"
+              : "Lab voice lines (in order)";
           const ctx = `[[Lab completion]]
 sensorSummary: ${input.sensorSummary ?? "(none)"}
+predictionChoice: ${input.predictionChoice && input.predictionChoice.length > 0 ? input.predictionChoice : "(none)"}
 From teach (handoffContext):
 ${input.handoffContext && input.handoffContext.length > 0 ? input.handoffContext : "(none)"}
-Lab voice lines (in order, Spanish):
+${linesLabel}:
 ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
           labReturnContextRef.current = ctx;
-          setShowLabReturn(true);
+          setShowLabReturn(false);
+          const followQ =
+            L === "es"
+              ? "Acabamos de completar el laboratorio con el teléfono. En una o dos frases cortas de aula en español, conecta lo que sentiste y lo que dijo el lab con el tema de cinemática que estamos viendo; luego haz una pregunta socrática breve sobre el tema principal."
+              : "We just completed the phone tilt lab. In one or two short classroom sentences, connect what you felt and what the lab said to the kinematics point we are studying, then ask one brief Socratic follow-up about the main topic.";
+          window.setTimeout(() => {
+            void askInternalRef.current?.("teach", {
+              question: followQ,
+              handoffContext: ctx,
+            });
+          }, 400);
         }
 
-        if (drawToolCalls === 0 && speakCount > 0) {
+        if (
+          mode === "teach" &&
+          drawToolCalls === 0 &&
+          speakCount > 0 &&
+          labSuggestCount === 0
+        ) {
           toast.warning("Nothing was drawn", {
             description: "Rephrase the question to get a visual explanation.",
           });
         }
 
-        // Gentle idle glide back to a resting point.
         if (!controller.signal.aborted) {
           if (pendingSpeakPromiseRef.current) {
             await pendingSpeakPromiseRef.current;
@@ -488,12 +644,15 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
         setStatus("error");
         hidePen();
         toast.error("Unexpected error", { description: String(err) });
+        if (mode === "lab") throw err;
       } finally {
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
     [hidePen, isBusy, speech, stop, unlockAudio],
   );
+
+  askInternalRef.current = askInternal;
 
   const ask = useCallback(
     async (question: string) => {
@@ -507,6 +666,7 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
       question: string;
       handoffContext?: string;
       sensorSummary?: string;
+      predictionChoice?: string;
     }) => {
       return askInternal("lab", input);
     },
@@ -518,9 +678,13 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
     if (!ctx) return;
     labReturnContextRef.current = null;
     setShowLabReturn(false);
+    const L = langRef.current;
+    const q =
+      L === "es"
+        ? "Acabamos de completar el laboratorio con el teléfono. En una o dos frases cortas de aula en español, conecta la experiencia y el diálogo del lab con el tema de cinemática que estamos viendo, luego una pregunta socrática breve."
+        : "We just completed the phone tilt lab. In one or two short classroom English sentences, connect the tilt experience and the lab dialogue to the kinematics point we are studying, then ask one Socratic follow-up for the main topic.";
     void askInternal("teach", {
-      question:
-        "We just completed the phone tilt lab. In one or two short classroom English sentences, connect the tilt experience and the lab dialogue to the kinematics point we are studying, then ask one Socratic follow-up for the main topic.",
+      question: q,
       handoffContext: ctx,
     });
   }, [askInternal]);
@@ -550,11 +714,14 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
     voice: speech.voice,
     setVoice: speech.setVoice,
     voices: speech.voices,
+    lang,
+    setLang,
     ask,
     askLab,
     stop,
     newLesson,
     showLabReturn,
     returnToTeach,
+    patchLabSuggestion,
   };
 }
