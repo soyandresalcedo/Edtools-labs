@@ -9,6 +9,7 @@ const transformersWeb = path.resolve(
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  swcMinify: false,
   transpilePackages: ["@huggingface/transformers", "kokoro-js"],
   experimental: {
     esmExternals: "loose",
@@ -20,10 +21,23 @@ const nextConfig = {
     // the browser. Always substitute the browser bundle.
     config.plugins.push(
       new webpack.NormalModuleReplacementPlugin(
-        /transformers\.node\.mjs$/,
+        /transformers\.node(?:\.min)?\.(?:mjs|cjs|js)$/,
         transformersWeb,
       ),
     );
+
+    if (!isServer) {
+      config.plugins.push(
+        new webpack.IgnorePlugin({
+          resourceRegExp: /onnxruntime-web[\\/]dist[\\/]ort\.node\./,
+        }),
+      );
+      config.plugins.push(
+        new webpack.IgnorePlugin({
+          resourceRegExp: /^onnxruntime-node$/,
+        }),
+      );
+    }
 
     config.experiments = {
       ...(config.experiments ?? {}),
@@ -52,6 +66,7 @@ const nextConfig = {
       ...(config.resolve.alias ?? {}),
       sharp$: false,
       "onnxruntime-node$": false,
+      "onnxruntime-node": false,
       // Always use the browser build (see NormalModuleReplacementPlugin above).
       "@huggingface/transformers": transformersWeb,
     };
@@ -60,6 +75,8 @@ const nextConfig = {
       config.externals = config.externals || [];
       config.externals.push({
         "onnxruntime-node": "commonjs onnxruntime-node",
+        "onnxruntime-web": "commonjs onnxruntime-web",
+        "onnxruntime-common": "commonjs onnxruntime-common",
         sharp: "commonjs sharp",
       });
     }

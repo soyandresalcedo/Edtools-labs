@@ -573,9 +573,6 @@ export function useSpeech(): UseSpeech {
           // #endregion
           resolve();
         };
-        source.onended = () => finish("onended");
-        source.onerror = () => finish("onerror");
-
         // Watchdog: if onended never fires, don't stall the queue.
         const watchdogMs = Math.max(800, durationMs + 800);
         const t = setTimeout(() => {
@@ -592,7 +589,12 @@ export function useSpeech(): UseSpeech {
           finish(reason);
         };
         source.onended = () => wrappedFinish("onended");
-        source.onerror = () => wrappedFinish("onerror");
+        // AudioBufferSourceNode no expone onerror en los typings del DOM;
+        // usamos addEventListener defensivamente (no-op si el runtime no lo dispara).
+        (source as unknown as EventTarget).addEventListener(
+          "error",
+          () => wrappedFinish("onerror"),
+        );
 
         try {
           source.start();
