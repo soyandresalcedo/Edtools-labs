@@ -248,6 +248,25 @@ export function useLessonStream(): UseLessonStream {
       let drawToolCalls = 0;
 
       try {
+        // Excalidraw se carga async (dynamic import ssr:false). Evita "dibujar a la nada"
+        // si el usuario pregunta antes de que `excalidrawAPI` exista.
+        {
+          const deadline = Date.now() + 4000;
+          while (!canvasRef.current && Date.now() < deadline) {
+            if (controller.signal.aborted) return;
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((r) => setTimeout(r, 25));
+          }
+          if (!canvasRef.current) {
+            const msg =
+              "Excalidraw is still starting. Please wait a second and try again.";
+            setCaption(msg);
+            setStatus("error");
+            toast.error("Canvas not ready", { description: msg });
+            return;
+          }
+        }
+
         const res = await fetch("/api/lesson", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
