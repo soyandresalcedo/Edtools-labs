@@ -24,27 +24,28 @@ pnpm install
 pnpm dev
 ```
 
-Al arrancar se listan URLs en **LAN** (misma Wi‑Fi) para abrir en el móvil.
-En el teléfono prueba también `/poc/tilt` (tilt / sensores).
+On startup the console prints **LAN** URLs (same Wi‑Fi) for testing on a phone.
+Also try `/poc/tilt` on the device (tilt / sensor PoC).
 
-- **Local:** http://localhost:3000 — chip o pregunta en inglés de cinemática.
-- **Móvil (HTTP):** usa la IP que imprime la consola; si el firewall del Mac
-  bloquea el puerto 3000, permite conexiones entrantes.
-- **Sensores / HTTPS:** en muchos móviles `DeviceOrientation` solo está disponible
-  en *secure context*; con `http://192.168.x.x` el navegador puede no exponer
-  siquiera el API. Úsalo vía túnel HTTPS (recomendado: **Cloudflare quick tunnel**):
-  1. Deja `pnpm dev` en marcha (mira en consola si usas el puerto 3000 o 3001).
-  2. `cloudflared tunnel --url http://127.0.0.1:3000` (cambia a `:3001` si Next
-     eligió otro puerto).
-  3. Abre en el teléfono la URL `https://….trycloudflare.com` que imprime el
-     comando, y añade `/poc/tilt` para la PoC de sensores. La URL **cambia** en
-     cada arranque del túnel. Alternativa sin instalar: `npx localtunnel@2.0.2 --port 3000`.
+- **Local:** http://localhost:3000 — use a chip or type a kinematics question in English.
+- **Phone over HTTP:** use the IP printed in the console; if your Mac firewall
+  blocks port 3000, allow inbound connections for that port.
+- **Sensors / HTTPS:** on many phones `DeviceOrientation` is only available in a
+  *secure context*; over `http://192.168.x.x` the browser may not expose the API
+  at all. Use an HTTPS tunnel (recommended: **Cloudflare quick tunnel**):
+  1. Keep `pnpm dev` running (check the console for port 3000 vs 3001).
+  2. Run `cloudflared tunnel --url http://127.0.0.1:3000` (use `:3001` if Next
+     picked another port).
+  3. On your phone open the `https://….trycloudflare.com` URL printed by the
+     command, and append `/poc/tilt` for the sensor PoC. The URL **changes** each
+     time you start a new tunnel. Install-free alternative:
+     `npx localtunnel@2.0.2 --port 3000`.
 
-Variables de entorno: copia `.env.example` a `.env.local`.
+Environment: copy `.env.example` to `.env.local`.
 
 ```bash
-pnpm build          # producción (incluye assets TTS en public/vendors-tts)
-pnpm start          # sirve en 0.0.0.0
+pnpm build          # production (includes TTS assets under public/vendors-tts)
+pnpm start          # listens on 0.0.0.0
 pnpm preview        # build + start
 ```
 
