@@ -36,12 +36,15 @@ export default function Home() {
     speechStatus,
     speechEngine,
     speechPhase,
+    kokoroStatus,
+    kokoroProgress,
     kokoroInitError,
     retryKokoro,
     voice,
     setVoice,
     voices,
     ask,
+    askLab,
     stop,
     newLesson,
   } = useLessonStream();
@@ -77,12 +80,18 @@ export default function Home() {
           speechStatus={speechStatus}
           speechEngine={speechEngine}
           speechPhase={speechPhase}
+            kokoroStatus={kokoroStatus}
+            kokoroProgress={kokoroProgress}
           kokoroInitError={kokoroInitError}
           retryKokoro={retryKokoro}
           voice={voice}
           setVoice={setVoice}
           voices={voices}
           onAsk={handleAsk}
+          onAskLab={(input) => {
+            setMobileOpen(false);
+            void askLab(input);
+          }}
           onStop={stop}
           onNewLesson={newLesson}
           onCollapse={() => setFocusMode(true)}
@@ -138,12 +147,18 @@ export default function Home() {
             speechStatus={speechStatus}
             speechEngine={speechEngine}
             speechPhase={speechPhase}
+            kokoroStatus={kokoroStatus}
+            kokoroProgress={kokoroProgress}
             kokoroInitError={kokoroInitError}
             retryKokoro={retryKokoro}
             voice={voice}
             setVoice={setVoice}
             voices={voices}
             onAsk={handleAsk}
+            onAskLab={(input) => {
+              setMobileOpen(false);
+              void askLab(input);
+            }}
             onStop={stop}
             onNewLesson={newLesson}
             isAudioSpeaking={isAudioSpeaking}

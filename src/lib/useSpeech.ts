@@ -11,6 +11,8 @@ export type SpeechStatus =
   | "error"
   | "unavailable";
 
+export type KokoroStatus = "idle" | "loading" | "ready" | "failed";
+
 export const KOKORO_VOICES = [
   { id: "af_heart", label: "Heart (warm, friendly)", lang: "en-US" },
   { id: "af_bella", label: "Bella (warm narrator)", lang: "en-US" },
@@ -105,6 +107,28 @@ async function configureWasmSingleThread(): Promise<void> {
       }
     ).backends?.onnx?.wasm;
     if (wasm) wasm.numThreads = 1;
+
+    // Prefer caching in browsers when available (faster second load, less jank).
+    try {
+      (env as any).useBrowserCache = true;
+      (env as any).useWasmCache = true;
+    } catch {
+      // ignore
+    }
+
+    // Point ORT WASM assets to our locally served copies when possible.
+    // This avoids CDN/DNS issues on mobile networks.
+    try {
+      const nextBase = (
+        window as { __NEXT_DATA__?: { basePath?: string } }
+      ).__NEXT_DATA__?.basePath;
+      const base = `${nextBase ?? ""}/vendors-tts/`.replace(/\/\//g, "/");
+      if ((env as any).backends?.onnx?.wasm) {
+        (env as any).backends.onnx.wasm.wasmPaths = base;
+      }
+    } catch {
+      // ignore
+    }
   } catch (e) {
     // #region debug log
     dbg("useSpeech.ts:configureWasmSingleThread", "transformers import FAILED", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? (e.stack ?? "").split("\n").slice(0, 5) : undefined }, "H1");
@@ -117,6 +141,8 @@ export interface UseSpeech {
   status: SpeechStatus;
   engine: SpeechEngine;
   phase: SpeechPhase;
+  kokoroStatus: KokoroStatus;
+  kokoroProgress: number | null;
   muted: boolean;
   setMuted: (value: boolean) => void;
   voice: KokoroVoiceId;
@@ -141,6 +167,12 @@ function hasWebGPU(): boolean {
 
 function hasSpeechSynthesis(): boolean {
   return typeof window !== "undefined" && "speechSynthesis" in window;
+}
+
+function isAndroidChrome(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return /Android/i.test(ua) && /Chrome\//i.test(ua);
 }
 
 function pickPreferredVoice(): SpeechSynthesisVoice | null {
@@ -169,22 +201,44 @@ function pickPreferredVoice(): SpeechSynthesisVoice | null {
   return voices.find((v) => v.lang.startsWith("en")) ?? voices[0];
 }
 
+function isMobileLike(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
 function kokoroLoadAttempts(): Array<{ device: "webgpu" | "wasm"; dtype: KokoroDtype }> {
   const out: Array<{ device: "webgpu" | "wasm"; dtype: KokoroDtype }> = [];
-  if (hasWebGPU()) {
-    out.push({ device: "webgpu", dtype: "fp32" });
-    out.push({ device: "webgpu", dtype: "q8" });
+  // En móvil priorizamos WASM cuantizado: primer uso suele ser por red/CPU,
+  // y WebGPU+fp32 tiende a ser el camino más caro.
+  if (isMobileLike()) {
+    out.push({ device: "wasm", dtype: "q8" });
+    out.push({ device: "wasm", dtype: "q4f16" });
+    out.push({ device: "wasm", dtype: "q4" });
+    // Android Chrome suele ser más estable con WASM al inicio; si WebGPU es viable
+    // lo dejamos como último intento.
+    if (hasWebGPU()) out.push({ device: "webgpu", dtype: "fp32" });
+  } else {
+    if (hasWebGPU()) {
+      out.push({ device: "webgpu", dtype: "fp32" });
+    }
+    out.push({ device: "wasm", dtype: "q8" });
+    out.push({ device: "wasm", dtype: "q4f16" });
+    out.push({ device: "wasm", dtype: "q4" });
   }
-  out.push({ device: "wasm", dtype: "q8" });
-  out.push({ device: "wasm", dtype: "q4f16" });
-  out.push({ device: "wasm", dtype: "q4" });
   return out;
 }
 
 export function useSpeech(): UseSpeech {
-  const [status, setStatus] = useState<SpeechStatus>("loading");
-  const [engine, setEngine] = useState<SpeechEngine>("none");
+  // UX: si el navegador soporta Web Speech, la app debe ser usable inmediatamente.
+  const [status, setStatus] = useState<SpeechStatus>(() =>
+    hasSpeechSynthesis() ? "ready" : "unavailable",
+  );
+  const [engine, setEngine] = useState<SpeechEngine>(() =>
+    hasSpeechSynthesis() ? "webspeech" : "none",
+  );
   const [phase, setPhase] = useState<SpeechPhase>("idle");
+  const [kokoroStatus, setKokoroStatus] = useState<KokoroStatus>("idle");
+  const [kokoroProgress, setKokoroProgress] = useState<number | null>(null);
   const [muted, setMutedState] = useState<boolean>(false);
   const [voice, setVoiceState] = useState<KokoroVoiceId>(DEFAULT_KOKORO_VOICE);
   const [kokoroInitError, setKokoroInitError] = useState<string | null>(null);
@@ -318,7 +372,8 @@ export function useSpeech(): UseSpeech {
     cancel();
     ttsRef.current = null;
     setKokoroInitError(null);
-    setStatus("loading");
+    setKokoroProgress(null);
+    setKokoroStatus("idle");
     setLoadKey((k) => k + 1);
   }, [cancel]);
 
@@ -372,8 +427,13 @@ export function useSpeech(): UseSpeech {
     async function init() {
       if (typeof window === "undefined") return;
 
-      setStatus("loading");
+      setKokoroStatus("loading");
+      setKokoroProgress(null);
       setKokoroInitError(null);
+
+      // Reduce ORT noise in consoles by default.
+      // NOTE: onnxruntime-web typings are not exported cleanly in our pinned dev build,
+      // so we avoid importing it directly here to keep TypeScript happy.
 
       if (hasSpeechSynthesis()) {
         const warmVoices = () => {
@@ -432,6 +492,22 @@ export function useSpeech(): UseSpeech {
               mod.KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
                 dtype,
                 device,
+                progress_callback: (p: unknown) => {
+                  try {
+                    const loaded = Number((p as any)?.loaded ?? NaN);
+                    const total = Number((p as any)?.total ?? NaN);
+                    if (
+                      Number.isFinite(loaded) &&
+                      Number.isFinite(total) &&
+                      total > 0
+                    ) {
+                      const frac = Math.max(0, Math.min(1, loaded / total));
+                      if (!disposed) setKokoroProgress(frac);
+                    }
+                  } catch {
+                    // ignore
+                  }
+                },
               }),
               KOKORO_PRETRAINED_TIMEOUT_MS,
               `KokoroTTS.from_pretrained(${device}/${dtype})`,
@@ -440,28 +516,11 @@ export function useSpeech(): UseSpeech {
             ttsRef.current = tts;
             setEngine("kokoro");
             setKokoroInitError(null);
-            setStatus("ready");
+            setKokoroStatus("ready");
             // #region debug log
             dbg("useSpeech.ts:init", "KOKORO READY", { device, dtype }, "H3");
             // #endregion
-            // Warm up the model to reduce first-utterance latency.
-            try {
-              const t0 = performance.now();
-              await tts.generate("Hi.", { voice: voiceRef.current });
-              const ms = Math.round(performance.now() - t0);
-              // #region debug log
-              dbg("useSpeech.ts:init", "warmup ok", { ms, device, dtype }, "W1");
-              // #endregion
-            } catch (e) {
-              // #region debug log
-              dbg(
-                "useSpeech.ts:init",
-                "warmup failed",
-                { error: e instanceof Error ? e.message : String(e), device, dtype },
-                "W1",
-              );
-              // #endregion
-            }
+            // No warmup en el camino crítico (móvil): puede empeorar la UX.
             return;
           } catch (e) {
             lastErr = e;
@@ -490,10 +549,9 @@ export function useSpeech(): UseSpeech {
         // #endregion
         setKokoroInitError(formatInitError(err));
         ttsRef.current = null;
-        if (hasSpeechSynthesis()) {
-          setEngine("webspeech");
-          setStatus("ready");
-        } else {
+        setKokoroStatus("failed");
+        // La UX no debe depender de Kokoro. Si no hay Web Speech, sí degradamos.
+        if (!hasSpeechSynthesis()) {
           setEngine("none");
           setStatus("unavailable");
         }
@@ -803,6 +861,8 @@ export function useSpeech(): UseSpeech {
     status,
     engine,
     phase,
+    kokoroStatus,
+    kokoroProgress,
     muted,
     setMuted,
     voice,

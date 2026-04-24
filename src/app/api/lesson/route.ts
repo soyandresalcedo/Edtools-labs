@@ -2,6 +2,7 @@ import { anthropic, MODEL } from "@/lib/anthropic";
 import { runDemoMode } from "@/lib/demoMode";
 import { ToolInputs, type ToolName, TOOLS } from "@/lib/tools";
 import { SYSTEM_PROMPT } from "@/prompts/system";
+import { LAB_SYSTEM_PROMPT } from "@/prompts/lab";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,8 +12,18 @@ type Emit = (event: string, data: unknown) => void;
 const isDemoMode = () => process.env.DEMO_MODE === "1";
 
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => null)) as null | { question?: unknown };
+  const body = (await req.json().catch(() => null)) as null | {
+    question?: unknown;
+    mode?: unknown;
+    handoffContext?: unknown;
+    sensorSummary?: unknown;
+  };
   const question = typeof body?.question === "string" ? body.question : "";
+  const mode = body?.mode === "lab" ? "lab" : "teach";
+  const handoffContext =
+    typeof body?.handoffContext === "string" ? body.handoffContext : "";
+  const sensorSummary =
+    typeof body?.sensorSummary === "string" ? body.sensorSummary : "";
 
   const encoder = new TextEncoder();
 
@@ -26,6 +37,7 @@ export async function POST(req: Request) {
 
       try {
         if (isDemoMode()) {
+          // Demo mode stays question-driven; lab wiring is about the real model.
           await runDemoMode(emit, question);
           controller.close();
           return;
@@ -40,12 +52,19 @@ export async function POST(req: Request) {
           return;
         }
 
+        const system = mode === "lab" ? LAB_SYSTEM_PROMPT : SYSTEM_PROMPT;
+        const userMessageParts = [
+          question || "What is velocity?",
+          handoffContext ? `\n\nhandoffContext:\n${handoffContext}` : "",
+          sensorSummary ? `\n\nsensorSummary:\n${sensorSummary}` : "",
+        ].filter(Boolean);
+
         const response = anthropic.messages.stream({
           model: MODEL,
           max_tokens: 2000,
-          system: SYSTEM_PROMPT,
+          system,
           tools: TOOLS,
-          messages: [{ role: "user", content: question || "What is velocity?" }],
+          messages: [{ role: "user", content: userMessageParts.join("") }],
         });
 
         const pendingInputs = new Map<number, string>();

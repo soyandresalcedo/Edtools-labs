@@ -119,6 +119,8 @@ export interface UseLessonStream {
   speechStatus: SpeechStatus;
   speechEngine: SpeechEngine;
   speechPhase: SpeechPhase;
+  kokoroStatus: "idle" | "loading" | "ready" | "failed";
+  kokoroProgress: number | null;
   speechAvailable: boolean;
   kokoroInitError: string | null;
   retryKokoro: () => void;
@@ -126,6 +128,11 @@ export interface UseLessonStream {
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
   ask(question: string): Promise<void>;
+  askLab(input: {
+    question: string;
+    handoffContext?: string;
+    sensorSummary?: string;
+  }): Promise<void>;
   stop(): void;
   newLesson(): void;
 }
@@ -194,9 +201,18 @@ export function useLessonStream(): UseLessonStream {
     setStatus("idle");
   }, [stop]);
 
-  const ask = useCallback(
-    async (question: string) => {
-      const trimmed = question.trim();
+  type AskMode = "teach" | "lab";
+
+  const askInternal = useCallback(
+    async (
+      mode: AskMode,
+      input: {
+        question: string;
+        handoffContext?: string;
+        sensorSummary?: string;
+      },
+    ) => {
+      const trimmed = input.question.trim();
       if (!trimmed || isBusy) return;
 
       // Attempt to unlock audio on the user-initiated action.
@@ -235,7 +251,12 @@ export function useLessonStream(): UseLessonStream {
         const res = await fetch("/api/lesson", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: trimmed }),
+          body: JSON.stringify({
+            question: trimmed,
+            mode,
+            handoffContext: input.handoffContext,
+            sensorSummary: input.sensorSummary,
+          }),
           signal: controller.signal,
         });
 
@@ -432,6 +453,24 @@ export function useLessonStream(): UseLessonStream {
     [hidePen, isBusy, speech, stop, unlockAudio],
   );
 
+  const ask = useCallback(
+    async (question: string) => {
+      return askInternal("teach", { question });
+    },
+    [askInternal],
+  );
+
+  const askLab = useCallback(
+    async (input: {
+      question: string;
+      handoffContext?: string;
+      sensorSummary?: string;
+    }) => {
+      return askInternal("lab", input);
+    },
+    [askInternal],
+  );
+
   return {
     canvasRef,
     status,
@@ -449,6 +488,8 @@ export function useLessonStream(): UseLessonStream {
     speechStatus: speech.status,
     speechEngine: speech.engine,
     speechPhase: speech.phase,
+    kokoroStatus: speech.kokoroStatus,
+    kokoroProgress: speech.kokoroProgress,
     speechAvailable: speech.available,
     kokoroInitError: speech.kokoroInitError,
     retryKokoro: speech.retryKokoro,
@@ -456,6 +497,7 @@ export function useLessonStream(): UseLessonStream {
     setVoice: speech.setVoice,
     voices: speech.voices,
     ask,
+    askLab,
     stop,
     newLesson,
   };
