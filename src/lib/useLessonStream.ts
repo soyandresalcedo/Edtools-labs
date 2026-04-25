@@ -38,6 +38,11 @@ import {
 import type { LabTopic } from "@/prompts/lab-recipes";
 import { isLabTopic } from "@/prompts/lab-recipes";
 import { formatProgressForPrompt, readLabProgress } from "@/lib/progressStore";
+import {
+  MAX_HISTORY_TURNS,
+  type SessionToolUse,
+  type SessionTurn,
+} from "@/lib/sessionTypes";
 
 const STEP_DELAY_MS = 60;
 
@@ -189,6 +194,20 @@ export function useLessonStream(): UseLessonStream {
   // anularía el pipelining gen↔play de `useSpeech.drainQueue`).
   const pendingDrawWorkerRef = useRef<Promise<void>>(Promise.resolve());
 
+  // Historial estructurado de la conversación. Cada turno guarda el texto del
+  // usuario y los tool_uses que el modelo emitió en esa respuesta. Lo
+  // enviamos a /api/lesson para que Claude reconstruya su propio contexto
+  // (tema activo, lo dibujado, lo dicho) y mantenga la conversación
+  // multi-turno. Solo se resetea con `newLesson`.
+  const sessionTurnsRef = useRef<SessionTurn[]>([]);
+
+  // Buffer del scene actual del canvas. Antes vivía como `const scene` dentro
+  // de cada `askInternal` (se reseteaba en cada pregunta) — eso anulaba la
+  // posibilidad de pedir follow-ups visuales sobre lo ya dibujado. Ahora
+  // sobrevive entre turnos: solo se vacía cuando el modelo emite
+  // `clear_canvas` o cuando el usuario pulsa "Nueva lección".
+  const sceneRef = useRef<any[]>([]);
+
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [caption, setCaption] = useState("");
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -275,6 +294,8 @@ export function useLessonStream(): UseLessonStream {
     setCaption("");
     setLog([]);
     setApiKeyHint(null);
+    sessionTurnsRef.current = [];
+    sceneRef.current = [];
     setStatus("idle");
   }, [stop]);
 
@@ -357,8 +378,14 @@ export function useLessonStream(): UseLessonStream {
       }
       setLog((prev) => [...prev, { role: "user", text: logUserText, ts: Date.now() }]);
 
-      const scene: any[] = [];
-      canvasRef.current?.updateScene({ elements: [] });
+      // CONVERSACIÓN MULTI-TURNO: el `scene` actual sobrevive entre `ask`s.
+      // Solo se vacía cuando el modelo emite `clear_canvas` o cuando el
+      // usuario pulsa "Nueva lección". Esto permite que un follow-up
+      // ("explícamelo de nuevo", "y si...") agregue elementos sobre el
+      // lienzo previo o limpie de forma explícita si el modelo lo decide.
+      const scene = sceneRef.current;
+      // El lápiz sí lo dejamos en su última posición de descanso para que la
+      // siguiente animación no salte; no es estado lógico, es presentación.
       penRef.current = { ...DEFAULT_PEN_REST };
       setPenState({
         point: penRef.current,
@@ -372,6 +399,17 @@ export function useLessonStream(): UseLessonStream {
       let labSuggestCount = 0;
       const labAgentLines: string[] = [];
       const webLang = webSpeechLocaleForLang(langRef.current);
+
+      // Buffer de tool_uses emitidos por el modelo en este turno. Se commitea
+      // a `sessionTurnsRef` cuando llega `done` para que el próximo `ask`
+      // mande un history coherente. Si el turno aborta o falla, no se
+      // commitea (evitamos enviar tool_uses sin tool_results).
+      const currentTurnToolUses: SessionToolUse[] = [];
+      let toolUseCounter = 0;
+      const nextToolUseId = () => {
+        toolUseCounter += 1;
+        return `cu-${Date.now().toString(36)}-${toolUseCounter}`;
+      };
 
       try {
         {
@@ -405,6 +443,11 @@ export function useLessonStream(): UseLessonStream {
             lang: langRef.current,
             predictionChoice: input.predictionChoice,
             labProgressSummary,
+            // Mandamos hasta MAX_HISTORY_TURNS turnos previos para que Claude
+            // mantenga el tema activo y conozca lo que ya dibujó/dijo. El
+            // server reconstruye estos turnos como user/assistant(tool_use)/
+            // tool_result tríos antes de llamar a messages.stream.
+            history: sessionTurnsRef.current.slice(-MAX_HISTORY_TURNS),
           }),
           signal: controller.signal,
         });
@@ -424,6 +467,16 @@ export function useLessonStream(): UseLessonStream {
 
           if (event === "tool_call") {
             const name = data.name as string;
+
+            // Snapshot de cada tool_use para reconstruir el turno cuando
+            // termine. Se incluyen TODOS los tools (speak, draw_*,
+            // clear_canvas, suggest_lab) porque la API de Anthropic exige
+            // un tool_result por cada tool_use que vea en `assistant`.
+            currentTurnToolUses.push({
+              id: nextToolUseId(),
+              name: name as ToolName,
+              input: data.input,
+            });
 
             if (name === "speak") {
               const text = String(data.input?.text ?? "");
@@ -629,6 +682,19 @@ export function useLessonStream(): UseLessonStream {
             if (mode === "lab") throw new Error(msg);
             return;
           } else if (event === "done") {
+            // Commit del turno: ahora `sessionTurnsRef` queda con un par
+            // (user, assistantToolUses) coherente que el próximo `ask`
+            // mandará al server. Truncamos al final de la lista para no
+            // crecer sin límite (el slice del fetch además aplica un cap).
+            if (currentTurnToolUses.length > 0) {
+              sessionTurnsRef.current = [
+                ...sessionTurnsRef.current,
+                {
+                  userText: trimmed,
+                  assistantToolUses: currentTurnToolUses.slice(),
+                },
+              ].slice(-MAX_HISTORY_TURNS);
+            }
             break;
           } else if (event === "narration_delta") {
             console.warn("[ui] narration_delta ignored", data);
