@@ -425,20 +425,26 @@ export function useLessonStream(): UseLessonStream {
 
             if (name === "speak") {
               const text = String(data.input?.text ?? "");
-              if (pendingSpeakPromiseRef.current) {
-                await pendingSpeakPromiseRef.current;
-              }
-              setStatus("speaking");
-              setCaption(text);
-              setLog((prev) => [
-                ...prev,
-                { role: "agent", text, ts: Date.now() },
-              ]);
+              // OJO: NO esperamos al `pendingSpeakPromiseRef` previo. Si lo
+              // hiciéramos, el bucle SSE quedaría bloqueado hasta que termine
+              // de sonar la frase anterior y la siguiente ni siquiera entraría
+              // a la cola → anula el pipelining de `useSpeech.drainQueue`.
+              // En cambio, encolamos inmediatamente y delegamos la sincronía
+              // de caption/log/status al callback `onStart`, que `useSpeech`
+              // dispara justo antes de que el audio empiece a sonar.
               speakCount++;
               if (mode === "lab") labAgentLines.push(text);
               const p = speech.speakAsync(text, {
                 timeoutMs: 30000,
                 webSpeechLang: webLang,
+                onStart: () => {
+                  setStatus("speaking");
+                  setCaption(text);
+                  setLog((prev) => [
+                    ...prev,
+                    { role: "agent", text, ts: Date.now() },
+                  ]);
+                },
               });
               pendingSpeakPromiseRef.current = p;
               void p.then(({ durationMs }) => {

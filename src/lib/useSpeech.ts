@@ -74,7 +74,26 @@ interface SpeakTask {
   /** BCP-47, p. ej. "es-419" para Lab; vacío/omitido = inglés (Teach). */
   webSpeechLang?: string;
   resolve?: (value: { durationMs: number }) => void;
+  /**
+   * Disparado justo antes de que el audio empiece a sonar (kokoro/elevenlabs)
+   * o de invocar `speechSynthesis.speak` (webspeech). Permite a quienes encolan
+   * frases sincronizar caption/log con el inicio real de la reproducción, en
+   * vez de con el momento en que se llama `speakAsync`.
+   */
+  onStart?: () => void;
 }
+
+/**
+ * Item ya generado/decodificado, listo para reproducirse.
+ *
+ * `play()` arranca la reproducción y se resuelve cuando termina (onended o
+ * watchdog). Devuelve sin tocar phase/speaking porque eso lo gobierna
+ * `drainQueue` para evitar parpadeo entre frases pipeleadas.
+ */
+type PreparedSpeakTask = {
+  task: SpeakTask;
+  play: () => Promise<void>;
+};
 
 export interface UseSpeech {
   status: SpeechStatus;
@@ -91,7 +110,11 @@ export interface UseSpeech {
   speak: (text: string) => void;
   speakAsync: (
     text: string,
-    opts?: { timeoutMs?: number; webSpeechLang?: string },
+    opts?: {
+      timeoutMs?: number;
+      webSpeechLang?: string;
+      onStart?: () => void;
+    },
   ) => Promise<{ durationMs: number }>;
   cancel: () => void;
   available: boolean;
@@ -259,6 +282,19 @@ export function useSpeech(): UseSpeech {
   const activeSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const queueRef = useRef<SpeakTask[]>([]);
   const runningRef = useRef(false);
+  /**
+   * Slot de prefetch (depth=1) usado por `drainQueue`: mientras suena la frase
+   * N, aquí guardamos la frase N+1 ya generada/decodificada. Lo expongo como
+   * ref para que `cancel()` y `setMuted(true)` puedan marcar su task como
+   * cancelada y evitar que un buffer huérfano arranque después.
+   */
+  const prefetchedRef = useRef<PreparedSpeakTask | null>(null);
+  /**
+   * Timestamp `performance.now()` al que terminó la última reproducción. Se
+   * usa para calcular `gapMs` entre frases en los logs `dbg`. Valor 0 => sin
+   * frase previa (primera del turno).
+   */
+  const lastPlayEndRef = useRef(0);
   const preferredVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const preferredEsVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const enginePrefRef = useRef<EnginePref>("auto");
@@ -429,6 +465,17 @@ export function useSpeech(): UseSpeech {
       }
     });
     queueRef.current = [];
+    // Marcar como cancelada cualquier frase ya pre-generada en el slot de
+    // prefetch. Su `play()` checkea `task.cancelled` y resuelve sin sonar.
+    if (prefetchedRef.current) {
+      prefetchedRef.current.task.cancelled = true;
+      try {
+        prefetchedRef.current.task.resolve?.({ durationMs: 0 });
+      } catch {
+        // ignore
+      }
+      prefetchedRef.current = null;
+    }
     try {
       activeSourceRef.current?.stop();
     } catch {
@@ -442,6 +489,7 @@ export function useSpeech(): UseSpeech {
         // ignore
       }
     }
+    lastPlayEndRef.current = 0;
     setSpeaking(false);
     setPhase("idle");
   }, [setSpeaking]);
@@ -490,6 +538,16 @@ export function useSpeech(): UseSpeech {
         }
       });
       queueRef.current = [];
+      // Mismo cleanup que `cancel()`: marcar prefetched como cancelado.
+      if (prefetchedRef.current) {
+        prefetchedRef.current.task.cancelled = true;
+        try {
+          prefetchedRef.current.task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        prefetchedRef.current = null;
+      }
       try {
         activeSourceRef.current?.stop();
       } catch {
@@ -497,6 +555,7 @@ export function useSpeech(): UseSpeech {
       }
       activeSourceRef.current = null;
       if (hasSpeechSynthesis()) window.speechSynthesis.cancel();
+      lastPlayEndRef.current = 0;
       setSpeaking(false);
       setPhase("idle");
     }
@@ -656,96 +715,153 @@ export function useSpeech(): UseSpeech {
     [ensureAudioCtx],
   );
 
-  const playWithKokoro = useCallback(
-    async (text: string, task: SpeakTask) => {
+  /**
+   * Etapa "prepare" de Kokoro: corre la inferencia y construye un AudioBuffer
+   * sin reproducirlo. Devuelve un closure `play()` que arranca el source y
+   * espera a `onended`. Esto permite a `drainQueue` correr `prepareKokoro` de
+   * la frase N+1 mientras el `play()` de N todavía está sonando.
+   *
+   * `setPhase("generating")` solo se aplica si NO estamos ya hablando otra
+   * frase: evita parpadeo "speaking -> generating -> speaking" cuando se está
+   * pipeleando una frase mientras otra suena.
+   */
+  const prepareKokoro = useCallback(
+    async (task: SpeakTask): Promise<PreparedSpeakTask | null> => {
       const tts = ttsRef.current;
       if (!tts) throw new Error("Kokoro not ready");
-      setPhase("generating");
-      const gen0 = performance.now();
+      if (task.cancelled || mutedRef.current) {
+        try {
+          task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+      if (!isSpeakingRef.current) setPhase("generating");
+
+      const tGenStart = performance.now();
       // Cast: kokoro-js tipa `voice` como literal union del catálogo completo;
       // nuestra fuente canónica es kokoroVoices.json, validada con isKokoroVoiceId.
       type GenerateOpts = NonNullable<Parameters<KokoroTTS["generate"]>[1]>;
-      const audio = await tts.generate(text, {
+      const audio = await tts.generate(task.text, {
         voice: voiceRef.current as GenerateOpts["voice"],
       });
-      const genMs = Math.round(performance.now() - gen0);
+      const genMs = Math.round(performance.now() - tGenStart);
       // #region debug log
       dbg(
-        "useSpeech.ts:playWithKokoro",
+        "useSpeech.ts:prepareKokoro",
         "generated",
-        { genMs, textLen: text.length, voice: voiceRef.current },
+        { genMs, textLen: task.text.length, voice: voiceRef.current },
         "T1",
       );
       // #endregion
-      if (task.cancelled || mutedRef.current) return;
+
+      if (task.cancelled || mutedRef.current) {
+        try {
+          task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+
       const ctx = ensureAudioCtx();
       if (!ctx) throw new Error("AudioContext unavailable");
-      if (ctx.state !== "running") {
-        await unlock({ timeoutMs: 2500 });
-      }
-      if (task.cancelled || mutedRef.current) return;
       const pcm = (audio as { audio: Float32Array }).audio;
       const sampleRate = Number(
         (audio as { sampling_rate?: number }).sampling_rate ?? 24000,
       );
       const buffer = ctx.createBuffer(1, pcm.length, sampleRate);
       buffer.getChannelData(0).set(pcm);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      activeSourceRef.current = source;
       const durationMs = Math.round((pcm.length / sampleRate) * 1000);
-      setSpeaking(true);
-      setPhase("speaking");
-      await new Promise<void>((resolve) => {
-        let done = false;
-        const finish = (reason: string) => {
-          if (done) return;
-          done = true;
+
+      return {
+        task,
+        play: async () => {
+          if (task.cancelled || mutedRef.current) {
+            task.resolve?.({ durationMs: 0 });
+            return;
+          }
+          if (ctx.state !== "running") {
+            await unlock({ timeoutMs: 2500 });
+          }
+          if (task.cancelled || mutedRef.current) {
+            task.resolve?.({ durationMs: 0 });
+            return;
+          }
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          activeSourceRef.current = source;
+
+          const tPlayStart = performance.now();
+          const prevEnd = lastPlayEndRef.current;
+          const gapMs = prevEnd ? Math.round(tPlayStart - prevEnd) : null;
           // #region debug log
           dbg(
-            "useSpeech.ts:playWithKokoro",
-            "playback finished",
-            { reason, durationMs, genMs, ctxState: ctx.state },
+            "useSpeech.ts:playKokoro",
+            "start",
+            { gapMs, durationMs, genMs, textLen: task.text.length },
             "T3",
           );
           // #endregion
-          resolve();
-        };
-        // Watchdog: if onended never fires, don't stall the queue.
-        const watchdogMs = Math.max(800, durationMs + 800);
-        const t = setTimeout(() => {
+
           try {
-            source.stop();
+            task.onStart?.();
           } catch {
-            // ignore
+            // user callback no debe romper el playback
           }
-          finish("watchdog");
-        }, watchdogMs);
+          if (!isSpeakingRef.current) setSpeaking(true);
+          setPhase("speaking");
 
-        const wrappedFinish = (reason: string) => {
-          clearTimeout(t);
-          finish(reason);
-        };
-        source.onended = () => wrappedFinish("onended");
-        // AudioBufferSourceNode no expone onerror en los typings del DOM;
-        // usamos addEventListener defensivamente (no-op si el runtime no lo dispara).
-        (source as unknown as EventTarget).addEventListener(
-          "error",
-          () => wrappedFinish("onerror"),
-        );
+          await new Promise<void>((resolve) => {
+            let done = false;
+            const finish = (reason: string) => {
+              if (done) return;
+              done = true;
+              // #region debug log
+              dbg(
+                "useSpeech.ts:playKokoro",
+                "finished",
+                { reason, durationMs, genMs, ctxState: ctx.state },
+                "T3",
+              );
+              // #endregion
+              resolve();
+            };
+            const watchdogMs = Math.max(800, durationMs + 800);
+            const t = setTimeout(() => {
+              try {
+                source.stop();
+              } catch {
+                // ignore
+              }
+              finish("watchdog");
+            }, watchdogMs);
 
-        try {
-          source.start();
-        } catch (e) {
-          console.warn("[useSpeech] source.start failed", e);
-          wrappedFinish("start_failed");
-        }
-      });
-      if (activeSourceRef.current === source) activeSourceRef.current = null;
-      if (isSpeakingRef.current) setSpeaking(false);
-      setPhase("idle");
-      task.resolve?.({ durationMs });
+            const wrappedFinish = (reason: string) => {
+              clearTimeout(t);
+              finish(reason);
+            };
+            source.onended = () => wrappedFinish("onended");
+            (source as unknown as EventTarget).addEventListener(
+              "error",
+              () => wrappedFinish("onerror"),
+            );
+
+            try {
+              source.start();
+            } catch (e) {
+              console.warn("[useSpeech] source.start failed", e);
+              wrappedFinish("start_failed");
+            }
+          });
+
+          lastPlayEndRef.current = performance.now();
+          if (activeSourceRef.current === source) activeSourceRef.current = null;
+          task.resolve?.({ durationMs });
+        },
+      };
     },
     [ensureAudioCtx, setSpeaking, unlock],
   );
@@ -785,45 +901,70 @@ export function useSpeech(): UseSpeech {
       const start = performance.now();
       utterance.onend = () => {
         const durationMs = Math.max(0, Math.round(performance.now() - start));
-        if (isSpeakingRef.current) setSpeaking(false);
-        setPhase("idle");
+        lastPlayEndRef.current = performance.now();
         task.resolve?.({ durationMs });
         resolve();
       };
       utterance.onerror = () => {
-        if (isSpeakingRef.current) setSpeaking(false);
-        setPhase("idle");
         task.resolve?.({ durationMs: 0 });
         resolve();
       };
       if (task.cancelled || mutedRef.current) {
-        setPhase("idle");
         task.resolve?.({ durationMs: 0 });
         resolve();
         return;
       }
       try {
-        setSpeaking(true);
+        const tPlayStart = performance.now();
+        const prevEnd = lastPlayEndRef.current;
+        const gapMs = prevEnd ? Math.round(tPlayStart - prevEnd) : null;
+        // #region debug log
+        dbg(
+          "useSpeech.ts:playWebSpeech",
+          "start",
+          { gapMs, lang, textLen: text.length },
+          "W1",
+        );
+        // #endregion
+        try {
+          task.onStart?.();
+        } catch {
+          // user callback no debe romper el playback
+        }
+        if (!isSpeakingRef.current) setSpeaking(true);
         setPhase("speaking");
         window.speechSynthesis.speak(utterance);
       } catch {
-        if (isSpeakingRef.current) setSpeaking(false);
-        setPhase("idle");
         task.resolve?.({ durationMs: 0 });
         resolve();
       }
     });
   }, [setSpeaking]);
 
-  const playWithElevenLabs = useCallback(
-    async (text: string, task: SpeakTask) => {
-      const lang = langPrefix(task.webSpeechLang ?? "en-US") === "es" ? "es" : "en";
-      setPhase("generating");
+  /**
+   * Misma estrategia que `prepareKokoro` para ElevenLabs: el fetch + decodeAudioData
+   * ocurren en `prepare`, mientras la reproducción del audio anterior sigue
+   * en curso. `play()` solo crea el source y espera a `onended`.
+   */
+  const prepareElevenLabs = useCallback(
+    async (task: SpeakTask): Promise<PreparedSpeakTask | null> => {
+      if (task.cancelled || mutedRef.current) {
+        try {
+          task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+      if (!isSpeakingRef.current) setPhase("generating");
+
+      const lang =
+        langPrefix(task.webSpeechLang ?? "en-US") === "es" ? "es" : "en";
       const t0 = performance.now();
       const res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, lang }),
+        body: JSON.stringify({ text: task.text, lang }),
       });
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => "");
@@ -833,138 +974,288 @@ export function useSpeech(): UseSpeech {
       const genMs = Math.round(performance.now() - t0);
       // #region debug log
       dbg(
-        "useSpeech.ts:playWithElevenLabs",
+        "useSpeech.ts:prepareElevenLabs",
         "fetched",
-        { genMs, bytes: arrayBuf.byteLength, lang, textLen: text.length },
+        { genMs, bytes: arrayBuf.byteLength, lang, textLen: task.text.length },
         "E1",
       );
       // #endregion
-      if (task.cancelled || mutedRef.current) return;
+
+      if (task.cancelled || mutedRef.current) {
+        try {
+          task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        return null;
+      }
       const ctx = ensureAudioCtx();
       if (!ctx) throw new Error("AudioContext unavailable");
-      if (ctx.state !== "running") {
-        await unlock({ timeoutMs: 2500 });
-      }
-      if (task.cancelled || mutedRef.current) return;
       const buffer = await ctx.decodeAudioData(arrayBuf.slice(0));
-      if (task.cancelled || mutedRef.current) return;
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      activeSourceRef.current = source;
       const durationMs = Math.round(buffer.duration * 1000);
-      setSpeaking(true);
-      setPhase("speaking");
-      await new Promise<void>((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          resolve();
-        };
-        const watchdogMs = Math.max(800, durationMs + 800);
-        const t = setTimeout(() => {
-          try {
-            source.stop();
-          } catch {
-            // ignore
+
+      return {
+        task,
+        play: async () => {
+          if (task.cancelled || mutedRef.current) {
+            task.resolve?.({ durationMs: 0 });
+            return;
           }
-          finish();
-        }, watchdogMs);
-        source.onended = () => {
-          clearTimeout(t);
-          finish();
-        };
-        try {
-          source.start();
-        } catch (e) {
-          console.warn("[useSpeech] elevenlabs source.start failed", e);
-          clearTimeout(t);
-          finish();
-        }
-      });
-      if (activeSourceRef.current === source) activeSourceRef.current = null;
-      if (isSpeakingRef.current) setSpeaking(false);
-      setPhase("idle");
-      task.resolve?.({ durationMs });
+          if (ctx.state !== "running") {
+            await unlock({ timeoutMs: 2500 });
+          }
+          if (task.cancelled || mutedRef.current) {
+            task.resolve?.({ durationMs: 0 });
+            return;
+          }
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          activeSourceRef.current = source;
+
+          const tPlayStart = performance.now();
+          const prevEnd = lastPlayEndRef.current;
+          const gapMs = prevEnd ? Math.round(tPlayStart - prevEnd) : null;
+          // #region debug log
+          dbg(
+            "useSpeech.ts:playElevenLabs",
+            "start",
+            { gapMs, durationMs, genMs, textLen: task.text.length },
+            "E2",
+          );
+          // #endregion
+
+          try {
+            task.onStart?.();
+          } catch {
+            // user callback no debe romper el playback
+          }
+          if (!isSpeakingRef.current) setSpeaking(true);
+          setPhase("speaking");
+
+          await new Promise<void>((resolve) => {
+            let done = false;
+            const finish = () => {
+              if (done) return;
+              done = true;
+              resolve();
+            };
+            const watchdogMs = Math.max(800, durationMs + 800);
+            const t = setTimeout(() => {
+              try {
+                source.stop();
+              } catch {
+                // ignore
+              }
+              finish();
+            }, watchdogMs);
+            source.onended = () => {
+              clearTimeout(t);
+              finish();
+            };
+            try {
+              source.start();
+            } catch (e) {
+              console.warn("[useSpeech] elevenlabs source.start failed", e);
+              clearTimeout(t);
+              finish();
+            }
+          });
+
+          lastPlayEndRef.current = performance.now();
+          if (activeSourceRef.current === source) activeSourceRef.current = null;
+          task.resolve?.({ durationMs });
+        },
+      };
     },
     [ensureAudioCtx, setSpeaking, unlock],
   );
 
+  /**
+   * Decide motor (kokoro / elevenlabs / webspeech) y devuelve un `PreparedSpeakTask`
+   * cuyo `play()` arrancará la reproducción cuando lo invoquemos. Si la etapa
+   * de prepare falla, hacemos fallback en cascada hasta Web Speech, que no
+   * tiene fase async útil (su "prepare" delega directo en `playWithWebSpeech`).
+   *
+   * Misma lógica de prioridad que la versión anterior:
+   *   1. enginePref=elevenlabs && proxy ready  → ElevenLabs
+   *   2. !tryEleven && Kokoro cargado && wantsEnglish → Kokoro
+   *   3. resto (incluye ES) → Web Speech
+   */
+  const prepareTask = useCallback(
+    async (task: SpeakTask): Promise<PreparedSpeakTask | null> => {
+      if (task.cancelled || mutedRef.current) {
+        try {
+          task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+
+      const wantsEnglish = langPrefix(task.webSpeechLang ?? "en-US") === "en";
+      const tryElevenFirst =
+        enginePrefRef.current === "elevenlabs" &&
+        elevenLabsStatusRef.current === "ready";
+      const useKokoro = !tryElevenFirst && !!ttsRef.current && wantsEnglish;
+
+      if (tryElevenFirst) {
+        try {
+          const prep = await prepareElevenLabs(task);
+          if (prep) return prep;
+        } catch (e) {
+          console.warn("[useSpeech] ElevenLabs prepare failed, falling back", e);
+          setElevenLabsStatus("blocked");
+          elevenLabsStatusRef.current = "blocked";
+          if (task.cancelled || mutedRef.current) {
+            try {
+              task.resolve?.({ durationMs: 0 });
+            } catch {
+              // ignore
+            }
+            return null;
+          }
+          if (!!ttsRef.current && wantsEnglish) {
+            try {
+              const prep = await prepareKokoro(task);
+              if (prep) return prep;
+            } catch (kErr) {
+              console.warn(
+                "[useSpeech] Kokoro fallback prepare failed, web-speech",
+                kErr,
+              );
+            }
+          }
+        }
+      } else if (useKokoro) {
+        try {
+          const prep = await prepareKokoro(task);
+          if (prep) return prep;
+        } catch (e) {
+          console.warn("[useSpeech] Kokoro prepare failed, web-speech fallback", e);
+        }
+      }
+
+      if (!hasSpeechSynthesis()) {
+        try {
+          task.resolve?.({ durationMs: 0 });
+        } catch {
+          // ignore
+        }
+        return null;
+      }
+      return {
+        task,
+        play: () => playWithWebSpeech(task.text, task),
+      };
+    },
+    [prepareElevenLabs, prepareKokoro, playWithWebSpeech],
+  );
+
+  /**
+   * Loop de drenado con prefetch=1.
+   *
+   * Mientras la frase N se reproduce (`await cur.play()`), arrancamos
+   * `prepareTask(N+1)` en paralelo. Cuando termina N, el buffer de N+1 ya está
+   * listo (en el caso típico `gen(N+1) <= play(N)`) y `play(N+1)` arranca sin
+   * gap apreciable — la misma sensación que Web Speech del SO, donde no hay
+   * fase de generación.
+   *
+   * Tasks cancelados (vía `cancel()` o `setMuted(true)`) ven `task.cancelled=true`
+   * dentro de `prepare`/`play` y resuelven con duration=0 sin tocar audio.
+   * `prefetchedRef` hace visible al exterior el slot pre-cargado para que esos
+   * eventos puedan marcarlo cancelado antes de que reproduzca.
+   *
+   * Phase/speaking se gobiernan acá (en lugar de dentro de cada `play()`):
+   *   - inicio del loop: phase="generating" si no estamos hablando
+   *   - cada `play()` interno setea phase="speaking" + setSpeaking(true)
+   *   - finally del loop: phase="idle" + setSpeaking(false)
+   * Entre frases pipeleadas el phase se queda en "speaking" sin parpadear.
+   */
   const drainQueue = useCallback(async () => {
     if (runningRef.current) return;
     runningRef.current = true;
+
+    let prefetched: PreparedSpeakTask | null = prefetchedRef.current;
+    prefetchedRef.current = prefetched;
+
     try {
-      while (queueRef.current.length) {
-        const task = queueRef.current.shift()!;
-        if (task.cancelled || mutedRef.current) continue;
+      if (!isSpeakingRef.current) setPhase("generating");
 
-        // Política de motor por turno:
-        // 1. Si el usuario eligió ElevenLabs y el proxy está listo → ElevenLabs.
-        // 2. Si el turno pide inglés y Kokoro está cargado → Kokoro (Fase 1).
-        // 3. Resto → Web Speech (cubre ES + cualquier fallback).
-        const wantsEnglish = langPrefix(task.webSpeechLang ?? "en-US") === "en";
-        const tryElevenFirst =
-          enginePrefRef.current === "elevenlabs" &&
-          elevenLabsStatusRef.current === "ready";
-        const useKokoro = !tryElevenFirst && !!ttsRef.current && wantsEnglish;
+      while (queueRef.current.length || prefetched) {
+        // 1. Determinar el item actual (cur)
+        let cur: PreparedSpeakTask | null;
+        if (prefetched) {
+          cur = prefetched;
+          prefetched = null;
+          prefetchedRef.current = null;
+        } else {
+          const t = queueRef.current.shift()!;
+          cur = await prepareTask(t);
+        }
 
-        try {
-          if (tryElevenFirst) {
+        // 2. Disparar prefetch de N+1 si ya hay item en cola, ANTES de
+        // empezar a reproducir N. Así `gen(N+1)` corre en paralelo a `play(N)`.
+        const nextTask = queueRef.current.shift();
+        const nextP = nextTask ? prepareTask(nextTask) : null;
+
+        // 3. Reproducir el actual.
+        if (cur) {
+          try {
+            await cur.play();
+          } catch (e) {
+            console.warn("[useSpeech] play failed", e);
             try {
-              await playWithElevenLabs(task.text, task);
-              continue;
-            } catch (e) {
-              console.warn("[useSpeech] ElevenLabs failed, falling back", e);
-              // Marcamos bloqueado para que la UI muestre el motivo, pero NO
-              // cambiamos enginePref: el usuario sigue queriendo ElevenLabs.
-              setElevenLabsStatus("blocked");
-              elevenLabsStatusRef.current = "blocked";
-              if (task.cancelled || mutedRef.current) {
-                task.resolve?.({ durationMs: 0 });
-                continue;
-              }
-              // Fall-through a Kokoro/WebSpeech como red de seguridad.
-              const fallbackUseKokoro = !!ttsRef.current && wantsEnglish;
-              if (fallbackUseKokoro) {
-                await playWithKokoro(task.text, task);
-              } else if (hasSpeechSynthesis()) {
-                await playWithWebSpeech(task.text, task);
-              } else {
-                task.resolve?.({ durationMs: 0 });
-              }
-              continue;
-            }
-          }
-
-          if (useKokoro) {
-            await playWithKokoro(task.text, task);
-          } else if (hasSpeechSynthesis()) {
-            await playWithWebSpeech(task.text, task);
-          }
-        } catch (err) {
-          console.warn("[useSpeech] playback error, falling back", err);
-          if (!task.cancelled && !mutedRef.current && hasSpeechSynthesis()) {
-            try {
-              await playWithWebSpeech(task.text, task);
+              cur.task.resolve?.({ durationMs: 0 });
             } catch {
               // ignore
             }
           }
+        }
+
+        // 4. Esperar al prefetch (si arrancó). En el caso típico ya terminó.
+        if (nextP) {
           try {
-            task.resolve?.({ durationMs: 0 });
-          } catch {
-            // ignore
+            prefetched = await nextP;
+            prefetchedRef.current = prefetched;
+          } catch (e) {
+            console.warn("[useSpeech] prefetch prepare failed", e);
+            prefetched = null;
+            prefetchedRef.current = null;
+          }
+        } else if (queueRef.current.length > 0) {
+          // 4b. Items que llegaron a la cola DURANTE play(N) y no alcanzamos a
+          // pre-generar. Aquí pagamos `gen(M)` como gap; es el peor caso, pero
+          // ocurre solo cuando el SSE entrega el siguiente speak más lento que
+          // la generación de Kokoro (raro en práctica).
+          const lateTask = queueRef.current.shift()!;
+          try {
+            prefetched = await prepareTask(lateTask);
+            prefetchedRef.current = prefetched;
+          } catch (e) {
+            console.warn("[useSpeech] late prepare failed", e);
+            prefetched = null;
+            prefetchedRef.current = null;
           }
         }
       }
     } finally {
       runningRef.current = false;
+      prefetchedRef.current = null;
+      if (isSpeakingRef.current) setSpeaking(false);
+      setPhase("idle");
     }
-  }, [playWithElevenLabs, playWithKokoro, playWithWebSpeech]);
+  }, [prepareTask, setSpeaking]);
 
   const speakAsync = useCallback(
-    async (text: string, opts?: { timeoutMs?: number; webSpeechLang?: string }): Promise<{ durationMs: number }> => {
+    async (
+      text: string,
+      opts?: {
+        timeoutMs?: number;
+        webSpeechLang?: string;
+        onStart?: () => void;
+      },
+    ): Promise<{ durationMs: number }> => {
       const timeoutMs = opts?.timeoutMs ?? 30000;
       if (!text || mutedRef.current) return { durationMs: 0 };
 
@@ -973,6 +1264,7 @@ export function useSpeech(): UseSpeech {
           text,
           cancelled: false,
           webSpeechLang: opts?.webSpeechLang,
+          onStart: opts?.onStart,
         };
         const p = new Promise<{ durationMs: number }>((resolve) => {
           task.resolve = resolve;

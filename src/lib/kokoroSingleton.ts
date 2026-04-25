@@ -133,15 +133,26 @@ async function loadKokoroOnce(): Promise<KokoroTTS> {
       "KokoroTTS.from_pretrained(wasm/q8)",
     )) as KokoroTTS;
 
+    // 5. Pre-warm de la voz seleccionada — BLOQUEANTE.
+    //
+    // Antes era fire-and-forget tras `setState("ready")`. Eso producía un gap
+    // notorio en la PRIMERA frase del primer turno: si el usuario hace una
+    // pregunta apenas la UI dice "Voice ready", el primer `tts.generate` real
+    // cae frío y compila el grafo ONNX en ese momento (cientos de ms / segundos).
+    //
+    // Esperar al pre-warm antes de marcar `ready` cambia ese costo a tiempo de
+    // carga (la barra de progreso se queda un poco más, ~300-700ms en desktop)
+    // pero hace que el primer turno suene tan fluido como los siguientes —
+    // alineado con el resto del pipelining gen↔play que hace `useSpeech.drainQueue`.
+    try {
+      await prewarmCurrentVoice(tts);
+    } catch {
+      // best-effort: aunque el pre-warm falle (p. ej. fonemizador raro), igual
+      // marcamos ready. La penalización vuelve al primer turno, pero no rompe.
+    }
+
     instance = tts;
     setState({ status: "ready" });
-
-    // 5. Pre-warm de la voz seleccionada (fire-and-forget): compila el grafo ONNX
-    // con los embeddings de la voz para evitar pagar el costo en el primer
-    // `speakAsync` real. No bloquea el setState("ready").
-    void prewarmCurrentVoice(tts).catch(() => {
-      // pre-warm es best-effort
-    });
 
     return tts;
   } catch (err) {
