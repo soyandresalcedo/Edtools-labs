@@ -257,15 +257,16 @@ async function prewarmCaches(): Promise<void> {
   const remoteBase = `https://huggingface.co/${KOKORO_MODEL_ID}/resolve/${KOKORO_REVISION}`;
 
   // 1. transformers-cache (modelo + tokenizer + config)
+  // Sólo archivos que sabemos publicados por HF para este modelo. Listar
+  // opcionales que HF responde 404 (special_tokens_map.json, generation_config.json)
+  // genera ruido en consola: aunque manejamos `!res.ok` con un return silencioso,
+  // el navegador igual imprime el 404 en DevTools. Si un modelo futuro publica
+  // esos archivos, se reactivan junto con el bump de revisión en kokoroVoices.json.
   await prewarmCache("transformers-cache", [
     "config.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "onnx/model_quantized.onnx",
-    // Opcionales: si HF los tiene transformers los consultará. El script .cjs
-    // los descarga si existen; si no, transformers caerá a HF (fatal=false).
-    "special_tokens_map.json",
-    "generation_config.json",
   ], remoteBase, localBase);
 
   // 2. kokoro-voices (5 voces .bin)
