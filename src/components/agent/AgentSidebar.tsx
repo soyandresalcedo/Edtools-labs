@@ -26,9 +26,6 @@ import type {
 } from "@/lib/useLessonStream";
 import {
   type ElevenLabsStatus,
-  type EnginePref,
-  type KokoroVoiceId,
-  type KokoroVoicesCatalog,
   type SpeechEngine,
   type SpeechPhase,
   type SpeechStatus,
@@ -55,11 +52,6 @@ export function AgentSidebar({
   speechStatus,
   speechEngine,
   speechPhase,
-  voice,
-  setVoice,
-  voices,
-  enginePref,
-  setEnginePref,
   elevenLabsStatus,
   lang,
   setLang,
@@ -83,11 +75,6 @@ export function AgentSidebar({
   speechStatus: SpeechStatus;
   speechEngine: SpeechEngine;
   speechPhase: SpeechPhase;
-  voice: KokoroVoiceId;
-  setVoice: (id: KokoroVoiceId) => void;
-  voices: KokoroVoicesCatalog;
-  enginePref: EnginePref;
-  setEnginePref: (next: EnginePref) => void;
   elevenLabsStatus: ElevenLabsStatus;
   lang: AppLang;
   setLang: (lang: AppLang) => void;
@@ -143,13 +130,13 @@ export function AgentSidebar({
   }, [progressSnap, lang]);
 
   const activeEngineLabel =
-    enginePref === "elevenlabs" && elevenLabsStatus === "ready"
-      ? "ElevenLabs"
-      : speechEngine === "kokoro"
-        ? "Edtools Tutor"
-        : lang === "es"
-          ? "navegador"
-          : "browser";
+    elevenLabsStatus === "ready"
+      ? lang === "es"
+        ? "voz premium"
+        : "Premium voice"
+      : lang === "es"
+        ? "voz del navegador"
+        : "Browser voice";
 
   const voiceLabel =
     speechStatus === "loading"
@@ -280,87 +267,13 @@ export function AgentSidebar({
         </div>
       </header>
 
-      {elevenLabsStatus === "ready" || enginePref === "elevenlabs" ? (
-        <div className="border-b px-4 py-2">
-          <label
-            htmlFor="engine-pref-select"
-            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-          >
-            {lang === "es" ? "Motor de voz" : "Voice engine"}
-          </label>
-          <select
-            id="engine-pref-select"
-            className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            value={enginePref}
-            onChange={(e) => setEnginePref(e.target.value as EnginePref)}
-            disabled={status === "speaking"}
-            aria-label={lang === "es" ? "Motor de voz" : "Voice engine"}
-          >
-            <option value="auto">
-              {lang === "es" ? "Automático" : "Auto"}
-            </option>
-            <option value="elevenlabs" disabled={elevenLabsStatus !== "ready"}>
-              ElevenLabs{elevenLabsStatus !== "ready"
-                ? lang === "es"
-                  ? " (no disponible)"
-                  : " (unavailable)"
-                : ""}
-            </option>
-          </select>
-          {enginePref === "elevenlabs" && elevenLabsStatus === "ready" ? (
-            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-              {lang === "es"
-                ? "ElevenLabs activo. Genera audio en la nube en EN y ES; consume cuota de tu cuenta."
-                : "ElevenLabs active. Cloud-generated audio in EN and ES; counts against your account quota."}
-            </p>
-          ) : null}
-          {enginePref === "elevenlabs" && elevenLabsStatus === "blocked" ? (
-            <p className="mt-2 text-[10px] leading-snug text-destructive">
-              {lang === "es"
-                ? "ElevenLabs falló en el último turno; usando voz de respaldo. Revisa la consola o tu cuota."
-                : "ElevenLabs failed on the last turn; using backup voice. Check the console or your quota."}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {speechEngine === "kokoro" && speechStatus === "ready" ? (
-        <div className="border-b px-4 py-2">
-          <label
-            htmlFor="tutor-voice-select"
-            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
-          >
-            {lang === "es" ? "Edtools Tutor" : "Edtools Tutor"}
-          </label>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="block w-full">
-                <select
-                  id="tutor-voice-select"
-                  className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={voice}
-                  onChange={(e) => setVoice(e.target.value as KokoroVoiceId)}
-                  disabled={status === "speaking" || lang === "es"}
-                  aria-label={
-                    lang === "es"
-                      ? "Edtools Tutor — vista previa en la próxima frase"
-                      : "Edtools Tutor — preview on next caption"
-                  }
-                >
-                  {voices.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.label}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              {lang === "es"
-                ? "Edtools Tutor — vista previa en la próxima frase"
-                : "Edtools Tutor — preview on next caption"}
-            </TooltipContent>
-          </Tooltip>
+      {elevenLabsStatus === "blocked" ? (
+        <div className="border-b border-destructive/30 bg-destructive/5 px-4 py-2">
+          <p className="text-[10px] leading-snug text-destructive">
+            {lang === "es"
+              ? "La voz premium falló; usando la voz del navegador como respaldo. Revisa la consola o tu cuota de ElevenLabs."
+              : "Premium voice failed; using browser voice as backup. Check the console or your ElevenLabs quota."}
+          </p>
         </div>
       ) : null}
 

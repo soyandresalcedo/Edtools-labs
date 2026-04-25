@@ -24,9 +24,6 @@ import type { ToolName } from "@/lib/tools";
 import {
   useSpeech,
   type ElevenLabsStatus,
-  type EnginePref,
-  type KokoroVoiceId,
-  type KokoroVoicesCatalog,
   type SpeechEngine,
   type SpeechPhase,
   type SpeechStatus,
@@ -149,16 +146,7 @@ export interface UseLessonStream {
   speechStatus: SpeechStatus;
   speechEngine: SpeechEngine;
   speechPhase: SpeechPhase;
-  kokoroStatus: "idle" | "loading" | "ready" | "failed";
-  kokoroProgress: number | null;
   speechAvailable: boolean;
-  kokoroInitError: string | null;
-  retryKokoro: () => void;
-  voice: KokoroVoiceId;
-  setVoice: (id: KokoroVoiceId) => void;
-  voices: KokoroVoicesCatalog;
-  enginePref: EnginePref;
-  setEnginePref: (next: EnginePref) => void;
   elevenLabsStatus: ElevenLabsStatus;
   lang: AppLang;
   setLang: (lang: AppLang) => void;
@@ -786,16 +774,7 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
     speechStatus: speech.status,
     speechEngine: speech.engine,
     speechPhase: speech.phase,
-    kokoroStatus: speech.kokoroStatus,
-    kokoroProgress: speech.kokoroProgress,
     speechAvailable: speech.available,
-    kokoroInitError: speech.kokoroInitError,
-    retryKokoro: speech.retryKokoro,
-    voice: speech.voice,
-    setVoice: speech.setVoice,
-    voices: speech.voices,
-    enginePref: speech.enginePref,
-    setEnginePref: speech.setEnginePref,
     elevenLabsStatus: speech.elevenLabsStatus,
     lang,
     setLang,

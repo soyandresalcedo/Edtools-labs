@@ -16,8 +16,8 @@
  *    consumen los eventos SSE quedándonos sólo con `speak` para validar la
  *    ida y vuelta.
  *
- * Se evita depender de `useSpeech` (Kokoro) para que la PoC sea ligera; voz
- * con `speechSynthesis` del navegador como opción opt-in.
+ * Se evita depender de `useSpeech` para que la PoC sea ligera; voz con
+ * `speechSynthesis` del navegador como opción opt-in.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

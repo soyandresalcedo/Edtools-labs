@@ -36,11 +36,6 @@ export default function Home() {
     speechStatus,
     speechEngine,
     speechPhase,
-    voice,
-    setVoice,
-    voices,
-    enginePref,
-    setEnginePref,
     elevenLabsStatus,
     ask,
     askLab,
@@ -84,11 +79,6 @@ export default function Home() {
           speechStatus={speechStatus}
           speechEngine={speechEngine}
           speechPhase={speechPhase}
-          voice={voice}
-          setVoice={setVoice}
-          voices={voices}
-          enginePref={enginePref}
-          setEnginePref={setEnginePref}
           elevenLabsStatus={elevenLabsStatus}
           lang={lang}
           setLang={setLang}
@@ -160,11 +150,6 @@ export default function Home() {
             speechStatus={speechStatus}
             speechEngine={speechEngine}
             speechPhase={speechPhase}
-            voice={voice}
-            setVoice={setVoice}
-            voices={voices}
-            enginePref={enginePref}
-            setEnginePref={setEnginePref}
             elevenLabsStatus={elevenLabsStatus}
             lang={lang}
             setLang={setLang}
