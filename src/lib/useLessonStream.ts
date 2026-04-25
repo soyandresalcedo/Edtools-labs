@@ -194,6 +194,12 @@ export function useLessonStream(): UseLessonStream {
   const pendingSpeakPromiseRef = useRef<Promise<{ durationMs: number }> | null>(
     null,
   );
+  // Cadena serial de Promesas para ejecutar los `draw_*` fuera del bucle SSE.
+  // Cada `tool_call` de dibujo se encadena con `.then` y captura el promise del
+  // `speak` inmediatamente anterior (`speakBefore`) antes de tocar el canvas.
+  // Esto restaura la sincronía habla→dibuja sin re-bloquear el SSE (lo que
+  // anularía el pipelining gen↔play de `useSpeech.drainQueue`).
+  const pendingDrawWorkerRef = useRef<Promise<void>>(Promise.resolve());
 
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [caption, setCaption] = useState("");
@@ -255,6 +261,14 @@ export function useLessonStream(): UseLessonStream {
     abortRef.current = null;
     speech.cancel();
     pendingSpeakPromiseRef.current = null;
+    // Descartamos la cadena previa del draw worker para que la SIGUIENTE
+    // lección no quede encolada detrás de closures pendientes. Los closures
+    // viejos ya no harán nada visible porque cada paso chequea
+    // `controller.signal.aborted` (que ahora es `true` tras el abort de
+    // arriba), pero romper la referencia evita además que `await
+    // pendingDrawWorkerRef.current` al final del próximo SSE espere a draws
+    // huérfanos.
+    pendingDrawWorkerRef.current = Promise.resolve();
     hidePen();
     setStatus("idle");
   }, [hidePen, speech]);
@@ -485,79 +499,120 @@ export function useLessonStream(): UseLessonStream {
               continue;
             }
 
-            setStatus("drawing");
+            // Encolamos el draw en una cadena serial de Promesas (`drawWorker`).
+            // El SSE NO espera al draw: solo guarda el promise del `speak`
+            // inmediatamente anterior (`speakBefore`) para que el closure lo
+            // espere antes de tocar el canvas. Así:
+            //   • Los `speak` siguen entrando rápido a la cola de useSpeech →
+            //     el pipelining gen↔play (`drainQueue` prefetch=1) se
+            //     conserva.
+            //   • Cada draw arranca cuando su speak asociado terminó →
+            //     restauramos el ritmo "habla, dibuja" del comportamiento
+            //     original sin re-bloquear el SSE.
             drawToolCalls++;
+            const speakBefore = pendingSpeakPromiseRef.current;
+            const drawName = name;
+            const drawInput = data.input;
 
-            if (name === "clear_canvas") {
-              scene.length = 0;
-              canvasRef.current?.updateScene({ elements: [] });
-              penRef.current = { ...DEFAULT_PEN_REST };
-              setPenState({
-                point: penRef.current,
-                color: "neutral",
-                phase: "rest",
-                visible: true,
-              });
-              await new Promise((r) => setTimeout(r, STEP_DELAY_MS));
-              continue;
-            }
-
-            try {
-              const toolName = name as ToolName;
-              const skeletons = toolCallToSkeletons(toolName, data.input);
-              const shapeSkeletons = skeletons.filter(
-                (s: any) => s?.type !== "text",
-              );
-              const textSkeletons = skeletons.filter(
-                (s: any) => s?.type === "text",
-              ) as TextSkeleton[];
-
-              const color = penColorForTool(toolName, data.input);
-
-              if (shapeSkeletons.length > 0) {
-                const rest = await tracePenForShape({
-                  name: toolName,
-                  input: data.input,
-                  current: penRef.current,
-                  setPen: setPenState,
-                  signal: controller.signal,
-                });
+            pendingDrawWorkerRef.current = pendingDrawWorkerRef.current.then(
+              async () => {
                 if (controller.signal.aborted) return;
-                penRef.current = rest;
-
-                const shapeElements =
-                  await buildElementsFromSkeletons(shapeSkeletons);
-                scene.push(...shapeElements);
-                canvasRef.current?.updateScene({ elements: [...scene] });
-              }
-
-              for (const textSkel of textSkeletons) {
+                if (speakBefore) {
+                  try {
+                    await speakBefore;
+                  } catch {
+                    // El speak fue cancelado/abortado: seguimos igual; el
+                    // chequeo de `controller.signal.aborted` justo abajo se
+                    // encarga de cortar si la lección entera fue abortada.
+                  }
+                }
                 if (controller.signal.aborted) return;
-                const lastSpeakMs = lastSpeakDurationMsRef.current;
-                const lastCaptionLen = Math.max(1, lastSpeakTextLenRef.current);
-                const approxCharDelayMs = lastSpeakMs
-                  ? Math.max(
-                      20,
-                      Math.min(85, Math.round(lastSpeakMs / lastCaptionLen)),
-                    )
-                  : undefined;
-                const { rest } = await typewriteText({
-                  skeleton: textSkel,
-                  api: canvasRef.current,
-                  scene,
-                  penFrom: penRef.current,
-                  penColor: color,
-                  setPen: setPenState,
-                  signal: controller.signal,
-                  charDelayMs: approxCharDelayMs,
-                });
-                penRef.current = rest;
-              }
-            } catch (e) {
-              console.error("draw failed", data, e);
-            }
 
-            await new Promise((r) => setTimeout(r, STEP_DELAY_MS));
+                setStatus("drawing");
+
+                if (drawName === "clear_canvas") {
+                  scene.length = 0;
+                  canvasRef.current?.updateScene({ elements: [] });
+                  penRef.current = { ...DEFAULT_PEN_REST };
+                  setPenState({
+                    point: penRef.current,
+                    color: "neutral",
+                    phase: "rest",
+                    visible: true,
+                  });
+                  await new Promise((r) => setTimeout(r, STEP_DELAY_MS));
+                  return;
+                }
+
+                try {
+                  const toolName = drawName as ToolName;
+                  const skeletons = toolCallToSkeletons(toolName, drawInput);
+                  const shapeSkeletons = skeletons.filter(
+                    (s: any) => s?.type !== "text",
+                  );
+                  const textSkeletons = skeletons.filter(
+                    (s: any) => s?.type === "text",
+                  ) as TextSkeleton[];
+
+                  const color = penColorForTool(toolName, drawInput);
+
+                  if (shapeSkeletons.length > 0) {
+                    const rest = await tracePenForShape({
+                      name: toolName,
+                      input: drawInput,
+                      current: penRef.current,
+                      setPen: setPenState,
+                      signal: controller.signal,
+                    });
+                    if (controller.signal.aborted) return;
+                    penRef.current = rest;
+
+                    const shapeElements =
+                      await buildElementsFromSkeletons(shapeSkeletons);
+                    scene.push(...shapeElements);
+                    canvasRef.current?.updateScene({ elements: [...scene] });
+                  }
+
+                  for (const textSkel of textSkeletons) {
+                    if (controller.signal.aborted) return;
+                    const lastSpeakMs = lastSpeakDurationMsRef.current;
+                    const lastCaptionLen = Math.max(
+                      1,
+                      lastSpeakTextLenRef.current,
+                    );
+                    const approxCharDelayMs = lastSpeakMs
+                      ? Math.max(
+                          20,
+                          Math.min(
+                            85,
+                            Math.round(lastSpeakMs / lastCaptionLen),
+                          ),
+                        )
+                      : undefined;
+                    const { rest } = await typewriteText({
+                      skeleton: textSkel,
+                      api: canvasRef.current,
+                      scene,
+                      penFrom: penRef.current,
+                      penColor: color,
+                      setPen: setPenState,
+                      signal: controller.signal,
+                      charDelayMs: approxCharDelayMs,
+                    });
+                    penRef.current = rest;
+                  }
+                } catch (e) {
+                  console.error(
+                    "draw failed",
+                    { name: drawName, input: drawInput },
+                    e,
+                  );
+                }
+
+                await new Promise((r) => setTimeout(r, STEP_DELAY_MS));
+              },
+            );
+            continue;
           } else if (event === "tool_error") {
             console.warn("tool_error", data);
           } else if (event === "error") {
@@ -635,6 +690,11 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
           if (pendingSpeakPromiseRef.current) {
             await pendingSpeakPromiseRef.current;
           }
+          // Drenar la cadena del draw worker antes de mover el lápiz a rest:
+          // si quedan draws pendientes (p. ej. el último grupo después del
+          // último speak), los ejecutamos primero para que `glidePen` no
+          // arranque encima de un canvas todavía mutándose.
+          await pendingDrawWorkerRef.current;
           await glidePen({
             from: penRef.current,
             to: { ...DEFAULT_PEN_REST },
