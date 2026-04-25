@@ -99,3 +99,15 @@ Four canned scenes are routed from the question text:
 ## License
 
 [GNU General Public License v3.0](LICENSE) (GPL-3.0)
+
+## Acknowledgements / Third-party
+
+This product uses the **Kokoro-82M** speech synthesis model
+(© hexgrad, [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0))
+via the [`kokoro-js`](https://www.npmjs.com/package/kokoro-js) library.
+
+- Model card: https://huggingface.co/hexgrad/Kokoro-82M
+- ONNX build used at runtime: https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX
+
+Voices are unmodified outputs of the upstream model; voice labels in the UI
+correspond to the model's own voice tags.

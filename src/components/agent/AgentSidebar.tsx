@@ -25,7 +25,6 @@ import type {
   LogEntry,
 } from "@/lib/useLessonStream";
 import {
-  KOKORO_SKIPPED_MOBILE,
   type ElevenLabsStatus,
   type EnginePref,
   type KokoroVoiceId,
@@ -56,10 +55,6 @@ export function AgentSidebar({
   speechStatus,
   speechEngine,
   speechPhase,
-  kokoroStatus,
-  kokoroProgress,
-  kokoroInitError,
-  retryKokoro,
   voice,
   setVoice,
   voices,
@@ -88,10 +83,6 @@ export function AgentSidebar({
   speechStatus: SpeechStatus;
   speechEngine: SpeechEngine;
   speechPhase: SpeechPhase;
-  kokoroStatus: "idle" | "loading" | "ready" | "failed";
-  kokoroProgress: number | null;
-  kokoroInitError: string | null;
-  retryKokoro: () => void;
   voice: KokoroVoiceId;
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
@@ -152,7 +143,7 @@ export function AgentSidebar({
     enginePref === "elevenlabs" && elevenLabsStatus === "ready"
       ? "ElevenLabs"
       : speechEngine === "kokoro"
-        ? "Kokoro"
+        ? "Edtools Tutor"
         : lang === "es"
           ? "navegador"
           : "browser";
@@ -303,7 +294,7 @@ export function AgentSidebar({
             aria-label={lang === "es" ? "Motor de voz" : "Voice engine"}
           >
             <option value="auto">
-              {lang === "es" ? "Automático (Kokoro / Sistema)" : "Auto (Kokoro / System)"}
+              {lang === "es" ? "Automático" : "Auto"}
             </option>
             <option value="elevenlabs" disabled={elevenLabsStatus !== "ready"}>
               ElevenLabs{elevenLabsStatus !== "ready"
@@ -330,48 +321,27 @@ export function AgentSidebar({
         </div>
       ) : null}
 
-      {speechEngine === "webspeech" && kokoroStatus === "loading" ? (
-        <div className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
-          <p className="mb-1">
-            {lang === "es"
-              ? "Cargando Kokoro en segundo plano. Mientras tanto puedes usar la app con la voz de tu sistema."
-              : "Loading Kokoro in the background. You can keep using the app with your system voice in the meantime."}
-          </p>
-          <p className="mb-1 text-[10px] text-muted-foreground/90">
-            {lang === "es"
-              ? "La primera carga en móvil puede tomar un par de minutos (modelo grande)."
-              : "First load on mobile can take a couple minutes (large model download)."}
-          </p>
-          {typeof kokoroProgress === "number" ? (
-            <p className="text-[10px] text-muted-foreground/90">
-              {lang === "es" ? "Progreso: " : "Progress: "}
-              <strong>{Math.round(kokoroProgress * 100)}%</strong>
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
       {speechEngine === "kokoro" && speechStatus === "ready" ? (
         <div className="border-b px-4 py-2">
           <label
-            htmlFor="kokoro-voice-select"
+            htmlFor="tutor-voice-select"
             className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
           >
-            {lang === "es" ? "Voz Kokoro" : "Kokoro voice"}
+            {lang === "es" ? "Edtools Tutor" : "Edtools Tutor"}
           </label>
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="block w-full">
                 <select
-                  id="kokoro-voice-select"
+                  id="tutor-voice-select"
                   className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={voice}
                   onChange={(e) => setVoice(e.target.value as KokoroVoiceId)}
                   disabled={status === "speaking" || lang === "es"}
                   aria-label={
                     lang === "es"
-                      ? "Voz Kokoro — vista previa en la próxima frase"
-                      : "Kokoro voice — preview on next caption"
+                      ? "Edtools Tutor — vista previa en la próxima frase"
+                      : "Edtools Tutor — preview on next caption"
                   }
                 >
                   {voices.map((v) => (
@@ -384,63 +354,10 @@ export function AgentSidebar({
             </TooltipTrigger>
             <TooltipContent>
               {lang === "es"
-                ? "Voz — vista previa en la próxima frase"
-                : "Voice — preview on next caption"}
+                ? "Edtools Tutor — vista previa en la próxima frase"
+                : "Edtools Tutor — preview on next caption"}
             </TooltipContent>
           </Tooltip>
-          {lang === "es" ? (
-            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-              Kokoro solo está disponible en inglés. Para español usamos la voz
-              del sistema automáticamente.
-            </p>
-          ) : null}
-        </div>
-      ) : speechEngine === "webspeech" && speechStatus === "ready" ? (
-        <div className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
-          {kokoroInitError === KOKORO_SKIPPED_MOBILE ? (
-            <p className="mb-2">
-              {lang === "es" ? (
-                <>
-                  En móvil usamos la <strong>voz del sistema</strong> (idioma según
-                  selector EN/ES) sin cargar Kokoro.
-                </>
-              ) : (
-                <>
-                  On mobile we use your <strong>system voice</strong> (language
-                  follows EN/ES toggle) without loading Kokoro.
-                </>
-              )}
-            </p>
-          ) : (
-            <>
-              <p className="mb-2">
-                {lang === "es"
-                  ? "Kokoro no está disponible ahora mismo, así que estás oyendo la voz integrada del sistema. Puedes seguir usando la app con normalidad."
-                  : "Kokoro is not available right now, so you are hearing your system's built-in speech instead. You can keep using the app normally."}
-              </p>
-              <p className="mb-2 text-[10px] text-muted-foreground/90">
-                {lang === "es"
-                  ? "Tip: en móvil, la primera carga de Kokoro puede tardar. Si sigue fallando, prueba Wi‑Fi vs datos, desactiva Ahorro de datos/VPN/bloqueadores de DNS y toca Reintentar."
-                  : "Tip: on mobile, the first Kokoro load can take a while. If it keeps failing, try Wi‑Fi vs data, disable Data Saver/VPN/DNS blockers, then tap Retry."}
-              </p>
-            </>
-          )}
-          {kokoroInitError && kokoroInitError !== KOKORO_SKIPPED_MOBILE ? (
-            <pre className="mb-2 max-h-28 overflow-auto whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-[10px] leading-tight text-destructive">
-              {kokoroInitError}
-            </pre>
-          ) : null}
-          {kokoroInitError !== KOKORO_SKIPPED_MOBILE ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 w-full text-xs"
-              onClick={() => retryKokoro()}
-            >
-              {lang === "es" ? "Reintentar Kokoro" : "Retry Kokoro"}
-            </Button>
-          ) : null}
         </div>
       ) : null}
 

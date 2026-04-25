@@ -10,6 +10,16 @@ const Excalidraw = dynamic(
   { ssr: false },
 );
 
+const MainMenu = dynamic(
+  async () => (await import("@excalidraw/excalidraw")).MainMenu,
+  { ssr: false },
+);
+
+const WelcomeScreen = dynamic(
+  async () => (await import("@excalidraw/excalidraw")).WelcomeScreen,
+  { ssr: false },
+);
+
 export function LessonCanvas({
   onReady,
   onAppStateChange,
@@ -31,16 +41,23 @@ export function LessonCanvas({
             scrollY: appState.scrollY ?? 0,
           });
         }}
-        initialData={{ appState: { viewBackgroundColor: "#fafafa" } }}
+        viewModeEnabled
+        initialData={{
+          appState: { viewBackgroundColor: "#fafafa", theme: "light" },
+        }}
         UIOptions={{
           canvasActions: {
             saveToActiveFile: false,
             loadScene: false,
             export: false,
             saveAsImage: false,
+            changeViewBackgroundColor: false,
           },
         }}
-      />
+      >
+        <MainMenu />
+        <WelcomeScreen />
+      </Excalidraw>
     </div>
   );
 }
