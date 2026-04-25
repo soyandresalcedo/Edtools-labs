@@ -483,16 +483,24 @@ export function useSpeech(): UseSpeech {
     if (statusRef.current === "ready" && engineRef.current !== "none") notifyReady();
   }, [engine, notifyReady, status]);
 
-  // Probe pasivo de /api/tts (sin gastar tokens): GET barato. Si la API no está
-  // configurada en server, marca el motor como `unavailable` para que la UI no
-  // ofrezca el toggle.
+  // Probe pasivo de /api/tts (sin gastar tokens): GET barato. El endpoint siempre
+  // responde 200 con `{ ok }` en el body; decidir por `body.ok` evita el ruido
+  // de "Failed to load resource: 503" en la consola cuando ElevenLabs no está
+  // configurado.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch("/api/tts", { method: "GET" });
         if (cancelled) return;
-        setElevenLabsStatus(res.ok ? "ready" : "unavailable");
+        let bodyOk = false;
+        try {
+          const json = (await res.json()) as { ok?: unknown };
+          bodyOk = json?.ok === true;
+        } catch {
+          // ignore
+        }
+        setElevenLabsStatus(bodyOk ? "ready" : "unavailable");
       } catch {
         if (cancelled) return;
         setElevenLabsStatus("unavailable");

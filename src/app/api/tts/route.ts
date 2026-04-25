@@ -34,6 +34,11 @@ function pickVoiceId(lang: AppLang, override?: string): string | null {
 /**
  * Health probe ligero: el cliente lo usa para saber si el motor ElevenLabs es
  * elegible sin gastar caracteres. No expone la API key.
+ *
+ * Siempre responde 200 con `{ ok }` en el cuerpo: el endpoint funciona; `ok=false`
+ * solo indica que ElevenLabs no está configurado en el servidor. Devolver 5xx
+ * generaba ruido en la consola del navegador (`Failed to load resource: 503`)
+ * cada vez que la app arrancaba sin la key, sin aportar información al usuario.
  */
 export async function GET(): Promise<Response> {
   const apiKey = process.env.ELEVENLABS_API_KEY;
@@ -51,7 +56,7 @@ export async function GET(): Promise<Response> {
       model: process.env.ELEVENLABS_MODEL ?? DEFAULT_MODEL,
     }),
     {
-      status: ok ? 200 : 503,
+      status: 200,
       headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
     },
   );
