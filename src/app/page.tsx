@@ -132,6 +132,7 @@ export default function Home() {
           <LessonCanvas
             onReady={(api) => (canvasRef.current = api)}
             onAppStateChange={setAppState}
+            lang={lang}
           />
           <PenCursor state={penState} appState={appState} />
         </div>

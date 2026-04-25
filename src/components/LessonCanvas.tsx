@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { ViewportAppState } from "@/lib/sceneToViewport";
+import type { AppLang } from "@/lib/lang";
 import "@excalidraw/excalidraw/index.css";
 
 const Excalidraw = dynamic(
@@ -14,10 +15,15 @@ const Excalidraw = dynamic(
 export function LessonCanvas({
   onReady,
   onAppStateChange,
+  lang = "en",
 }: {
   onReady: (api: ExcalidrawImperativeAPI) => void;
   onAppStateChange?: (s: ViewportAppState) => void;
+  lang?: AppLang;
 }) {
+  const heading =
+    lang === "es" ? "Donde la teoría se dibuja." : "Where theory comes alive.";
+
   return (
     <div className="w-full h-full">
       <Excalidraw
@@ -51,7 +57,21 @@ export function LessonCanvas({
         }}
       >
         <MainMenu />
-        <WelcomeScreen />
+        <WelcomeScreen>
+          <WelcomeScreen.Hints.MenuHint>{null}</WelcomeScreen.Hints.MenuHint>
+          <WelcomeScreen.Hints.ToolbarHint>
+            {null}
+          </WelcomeScreen.Hints.ToolbarHint>
+          <WelcomeScreen.Hints.HelpHint>{null}</WelcomeScreen.Hints.HelpHint>
+          <WelcomeScreen.Center>
+            <WelcomeScreen.Center.Logo>
+              <span className="el-welcome-logo">Edtools Labs</span>
+            </WelcomeScreen.Center.Logo>
+            <WelcomeScreen.Center.Heading>
+              {heading}
+            </WelcomeScreen.Center.Heading>
+          </WelcomeScreen.Center>
+        </WelcomeScreen>
       </Excalidraw>
     </div>
   );
