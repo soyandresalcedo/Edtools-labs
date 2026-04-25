@@ -4,6 +4,9 @@ type Emit = (event: string, data: unknown) => void;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const t = (lang: AppLang, en: string, es: string) =>
+  lang === "es" ? es : en;
+
 function normalize(q: string) {
   return q
     .toLowerCase()
@@ -70,7 +73,11 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Let's see the difference between velocity and acceleration using a ball on the ground.",
+      text: t(
+        lang,
+        "Let's see the difference between velocity and acceleration using a ball on the ground.",
+        "Veamos la diferencia entre velocidad y aceleración usando una pelota sobre el suelo.",
+      ),
     },
   });
   await sleep(400);
@@ -79,7 +86,11 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "First I draw the ground as a reference line so the ball has something to rest on.",
+      text: t(
+        lang,
+        "First I draw the ground as a reference line so the ball has something to rest on.",
+        "Primero dibujo el suelo como línea de referencia para que la pelota tenga dónde apoyarse.",
+      ),
     },
   });
   await sleep(400);
@@ -91,19 +102,33 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Here is the ball—we treat it as a particle so the shape does not distract us.",
+      text: t(
+        lang,
+        "Here is the ball—we treat it as a particle so the shape does not distract us.",
+        "Aquí está la pelota: la tratamos como una partícula para que la forma no nos distraiga.",
+      ),
     },
   });
   await sleep(400);
   emit("tool_call", {
     name: "draw_circle",
-    input: { x: 200, y: 480, r: 18, label: "ball", color: "#ef4444" },
+    input: {
+      x: 200,
+      y: 480,
+      r: 18,
+      label: t(lang, "ball", "pelota"),
+      color: "#ef4444",
+    },
   });
   await sleep(350);
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "The blue arrow is the velocity: direction and how fast the ball moves that way.",
+      text: t(
+        lang,
+        "The blue arrow is the velocity: direction and how fast the ball moves that way.",
+        "La flecha azul es la velocidad: la dirección y qué tan rápido se mueve la pelota en ese sentido.",
+      ),
     },
   });
   await sleep(450);
@@ -120,7 +145,11 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "The red arrow is the acceleration: it tells us if the velocity is speeding up, slowing down or turning.",
+      text: t(
+        lang,
+        "The red arrow is the acceleration: it tells us if the velocity is speeding up, slowing down or turning.",
+        "La flecha roja es la aceleración: nos dice si la velocidad está aumentando, disminuyendo o cambiando de dirección.",
+      ),
     },
   });
   await sleep(450);
@@ -137,7 +166,11 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "On top I add a short title so you remember the color code of the board.",
+      text: t(
+        lang,
+        "On top I add a short title so you remember the color code of the board.",
+        "Arriba pongo un título corto para que recuerdes el código de colores del tablero.",
+      ),
     },
   });
   await sleep(400);
@@ -146,7 +179,11 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
     input: {
       x: 420,
       y: 120,
-      text: "Velocity (blue) vs acceleration (red)",
+      text: t(
+        lang,
+        "Velocity (blue) vs acceleration (red)",
+        "Velocidad (azul) vs aceleración (roja)",
+      ),
       size: 20,
     },
   });
@@ -154,24 +191,30 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "If the red arrow pointed opposite to the blue one, what would happen to the ball's motion?",
+      text: t(
+        lang,
+        "If the red arrow pointed opposite to the blue one, what would happen to the ball's motion?",
+        "Si la flecha roja apuntara al lado contrario de la azul, ¿qué pasaría con el movimiento de la pelota?",
+      ),
     },
   });
   await sleep(350);
-  const reason =
-    lang === "es"
-      ? "Inclinar el teléfono ayuda a sentir dos direcciones opuestas como dos velocidades distintas."
-      : "Tilting the phone helps you feel two opposite directions as two different velocities.";
+  const reason = t(
+    lang,
+    "Tilting the phone helps you feel two opposite directions as two different velocities.",
+    "Inclinar el teléfono ayuda a sentir dos direcciones opuestas como dos velocidades distintas.",
+  );
   emit("tool_call", {
     name: "suggest_lab",
     input: {
       topic: "velocity-direction",
       reason,
       predict: {
-        question:
-          lang === "es"
-            ? "Antes de inclinar: ¿los dos lados se van a “anular” o van a sentirse opuestos?"
-            : "Before you tilt: will the two sides feel like they cancel, or like opposites?",
+        question: t(
+          lang,
+          "Before you tilt: will the two sides feel like they cancel, or like opposites?",
+          "Antes de inclinar: ¿los dos lados se van a “anular” o van a sentirse opuestos?",
+        ),
         options:
           lang === "es"
             ? ["Se anulan", "Se sienten opuestos", "Será igual"]
@@ -183,20 +226,25 @@ export async function runVelocityVsAccelerationDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text:
-        lang === "es"
-          ? "Abre la tarjeta del lab cuando quieras; luego dime si tu predicción coincidió."
-          : "Open the lab card when you are ready—then tell me if your prediction matched what you felt.",
+      text: t(
+        lang,
+        "Open the lab card when you are ready—then tell me if your prediction matched what you felt.",
+        "Abre la tarjeta del lab cuando quieras; luego dime si tu predicción coincidió.",
+      ),
     },
   });
 }
 
 /** Scene 2: MRU — t and x axes, x(t) line, car with constant v. Speech Variant interleaved. */
-export async function runMruGraphDemo(emit: Emit) {
+export async function runMruGraphDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "In uniform motion the velocity is constant; let's see it on the ground and on a position-vs-time graph.",
+      text: t(
+        lang,
+        "In uniform motion the velocity is constant; let's see it on the ground and on a position-vs-time graph.",
+        "En el movimiento uniforme la velocidad es constante; veámoslo en el suelo y en una gráfica de posición vs tiempo.",
+      ),
     },
   });
   await sleep(450);
@@ -206,20 +254,37 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "First the title, so you know the slope of x versus t will stay the same in this case.",
+      text: t(
+        lang,
+        "First the title, so you know the slope of x versus t will stay the same in this case.",
+        "Primero el título, para que sepas que la pendiente de x respecto a t se mantendrá igual en este caso.",
+      ),
     },
   });
   await sleep(400);
   emit("tool_call", {
     name: "draw_text",
-    input: { x: 60, y: 60, text: "MRU: constant velocity → x(t) is a straight line", size: 18 },
+    input: {
+      x: 60,
+      y: 60,
+      text: t(
+        lang,
+        "MRU: constant velocity → x(t) is a straight line",
+        "MRU: velocidad constante → x(t) es una línea recta",
+      ),
+      size: 18,
+    },
   });
   await sleep(300);
 
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "At the bottom I draw the straight road as a reference for one-dimensional motion.",
+      text: t(
+        lang,
+        "At the bottom I draw the straight road as a reference for one-dimensional motion.",
+        "Abajo dibujo la carretera recta como referencia del movimiento en una dimensión.",
+      ),
     },
   });
   await sleep(400);
@@ -232,19 +297,33 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "This rectangle is a car that keeps moving at the same pace, without braking or speeding up.",
+      text: t(
+        lang,
+        "This rectangle is a car that keeps moving at the same pace, without braking or speeding up.",
+        "Este rectángulo es un auto que sigue avanzando al mismo ritmo, sin frenar ni acelerar.",
+      ),
     },
   });
   await sleep(450);
   emit("tool_call", {
     name: "draw_rect",
-    input: { x: 140, y: 456, w: 56, h: 28, label: "car" },
+    input: {
+      x: 140,
+      y: 456,
+      w: 56,
+      h: 28,
+      label: t(lang, "car", "auto"),
+    },
   });
   await sleep(250);
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "The blue arrow shows the constant velocity to the right, like a clear open lane.",
+      text: t(
+        lang,
+        "The blue arrow shows the constant velocity to the right, like a clear open lane.",
+        "La flecha azul muestra la velocidad constante hacia la derecha, como un carril despejado.",
+      ),
     },
   });
   await sleep(450);
@@ -254,7 +333,7 @@ export async function runMruGraphDemo(emit: Emit) {
       from: [168, 470],
       to: [300, 470],
       kind: "velocity",
-      label: "constant v",
+      label: t(lang, "constant v", "v constante"),
     },
   });
   await sleep(350);
@@ -262,13 +341,22 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "On the right I open the graph panel: time on the horizontal axis, position on the vertical.",
+      text: t(
+        lang,
+        "On the right I open the graph panel: time on the horizontal axis, position on the vertical.",
+        "A la derecha abro el panel de la gráfica: el tiempo en el eje horizontal y la posición en el vertical.",
+      ),
     },
   });
   await sleep(450);
   emit("tool_call", {
     name: "draw_text",
-    input: { x: 400, y: 200, text: "Position vs time graph", size: 16 },
+    input: {
+      x: 400,
+      y: 200,
+      text: t(lang, "Position vs time graph", "Gráfica posición vs tiempo"),
+      size: 16,
+    },
   });
   await sleep(200);
 
@@ -277,7 +365,11 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "I draw the t axis and the x axis with the origin at the corner of the graph.",
+      text: t(
+        lang,
+        "I draw the t axis and the x axis with the origin at the corner of the graph.",
+        "Dibujo el eje t y el eje x con el origen en la esquina de la gráfica.",
+      ),
     },
   });
   await sleep(450);
@@ -294,7 +386,11 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "I label t and x so you know which axis you are reading when we talk about slope.",
+      text: t(
+        lang,
+        "I label t and x so you know which axis you are reading when we talk about slope.",
+        "Etiqueto t y x para que sepas qué eje estás leyendo cuando hablemos de la pendiente.",
+      ),
     },
   });
   await sleep(400);
@@ -312,7 +408,11 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Now I trace x versus t in short segments: in MRU the slope never changes.",
+      text: t(
+        lang,
+        "Now I trace x versus t in short segments: in MRU the slope never changes.",
+        "Ahora trazo x respecto a t en segmentos cortos: en el MRU la pendiente nunca cambia.",
+      ),
     },
   });
   await sleep(450);
@@ -334,17 +434,25 @@ export async function runMruGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "That slope is the velocity; if you double the velocity, would the line look steeper or flatter?",
+      text: t(
+        lang,
+        "That slope is the velocity; if you double the velocity, would the line look steeper or flatter?",
+        "Esa pendiente es la velocidad; si la duplicas, ¿la línea se vería más inclinada o más plana?",
+      ),
     },
   });
 }
 
 /** Scene 3: MRUA — v–t graph, axes, labels, inclined line. Speech Variant interleaved. */
-export async function runMruaGraphDemo(emit: Emit) {
+export async function runMruaGraphDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "Uniformly accelerated motion means velocity changes at a steady rate. Let's see it on a v–t graph.",
+      text: t(
+        lang,
+        "Uniformly accelerated motion means velocity changes at a steady rate. Let's see it on a v–t graph.",
+        "El movimiento uniformemente acelerado significa que la velocidad cambia a un ritmo constante. Veámoslo en una gráfica v–t.",
+      ),
     },
   });
   await sleep(450);
@@ -354,7 +462,11 @@ export async function runMruaGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "I draw both axes and label them: time at the bottom, velocity on the left.",
+      text: t(
+        lang,
+        "I draw both axes and label them: time at the bottom, velocity on the left.",
+        "Dibujo ambos ejes y los etiqueto: el tiempo abajo y la velocidad a la izquierda.",
+      ),
     },
   });
   await sleep(400);
@@ -383,7 +495,11 @@ export async function runMruaGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "When acceleration is constant, v(t) is a straight line whose slope equals the acceleration a.",
+      text: t(
+        lang,
+        "When acceleration is constant, v(t) is a straight line whose slope equals the acceleration a.",
+        "Cuando la aceleración es constante, v(t) es una línea recta cuya pendiente equivale a la aceleración a.",
+      ),
     },
   });
   await sleep(450);
@@ -402,17 +518,25 @@ export async function runMruaGraphDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "If the acceleration were twice as large, would this line look steeper or flatter?",
+      text: t(
+        lang,
+        "If the acceleration were twice as large, would this line look steeper or flatter?",
+        "Si la aceleración fuera el doble, ¿esta línea se vería más inclinada o más plana?",
+      ),
     },
   });
 }
 
 /** Scene 4: free fall — ledge, ball, gravity arrow. Speech Variant interleaved. */
-export async function runFreeFallDemo(emit: Emit) {
+export async function runFreeFallDemo(emit: Emit, lang: AppLang) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "In free fall we drop an object and only gravity acts. We ignore air resistance.",
+      text: t(
+        lang,
+        "In free fall we drop an object and only gravity acts. We ignore air resistance.",
+        "En la caída libre soltamos un objeto y solo actúa la gravedad. Ignoramos la resistencia del aire.",
+      ),
     },
   });
   await sleep(450);
@@ -422,7 +546,11 @@ export async function runFreeFallDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "I draw a short ledge near the top as the starting edge.",
+      text: t(
+        lang,
+        "I draw a short ledge near the top as the starting edge.",
+        "Dibujo una repisa corta cerca de la parte superior como borde de partida.",
+      ),
     },
   });
   await sleep(400);
@@ -435,20 +563,34 @@ export async function runFreeFallDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "I place the ball right below the ledge, ready to fall.",
+      text: t(
+        lang,
+        "I place the ball right below the ledge, ready to fall.",
+        "Coloco la pelota justo debajo de la repisa, lista para caer.",
+      ),
     },
   });
   await sleep(400);
   emit("tool_call", {
     name: "draw_circle",
-    input: { x: 400, y: 160, r: 18, label: "ball", color: "#ef4444" },
+    input: {
+      x: 400,
+      y: 160,
+      r: 18,
+      label: t(lang, "ball", "pelota"),
+      color: "#ef4444",
+    },
   });
   await sleep(350);
 
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "The gravity acceleration g always points straight down with the same magnitude.",
+      text: t(
+        lang,
+        "The gravity acceleration g always points straight down with the same magnitude.",
+        "La aceleración de la gravedad g siempre apunta hacia abajo con la misma magnitud.",
+      ),
     },
   });
   await sleep(450);
@@ -466,7 +608,11 @@ export async function runFreeFallDemo(emit: Emit) {
   emit("tool_call", {
     name: "speak",
     input: {
-      text: "If the initial velocity were zero, what happens to the velocity after one second?",
+      text: t(
+        lang,
+        "If the initial velocity were zero, what happens to the velocity after one second?",
+        "Si la velocidad inicial fuera cero, ¿qué pasa con la velocidad después de un segundo?",
+      ),
     },
   });
 }
@@ -479,13 +625,13 @@ export async function runDemoMode(
   const scene = pickDemoScene(question);
   switch (scene) {
     case "mru":
-      await runMruGraphDemo(emit);
+      await runMruGraphDemo(emit, lang);
       break;
     case "mrua":
-      await runMruaGraphDemo(emit);
+      await runMruaGraphDemo(emit, lang);
       break;
     case "freefall":
-      await runFreeFallDemo(emit);
+      await runFreeFallDemo(emit, lang);
       break;
     case "v_vs_a":
     default:
