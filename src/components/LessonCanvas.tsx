@@ -1,22 +1,13 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { MainMenu, WelcomeScreen } from "@excalidraw/excalidraw";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 import type { ViewportAppState } from "@/lib/sceneToViewport";
 import "@excalidraw/excalidraw/index.css";
 
 const Excalidraw = dynamic(
   async () => (await import("@excalidraw/excalidraw")).Excalidraw,
-  { ssr: false },
-);
-
-const MainMenu = dynamic(
-  async () => (await import("@excalidraw/excalidraw")).MainMenu,
-  { ssr: false },
-);
-
-const WelcomeScreen = dynamic(
-  async () => (await import("@excalidraw/excalidraw")).WelcomeScreen,
   { ssr: false },
 );
 
@@ -41,6 +32,8 @@ export function LessonCanvas({
             scrollY: appState.scrollY ?? 0,
           });
         }}
+        name=""
+        theme="light"
         viewModeEnabled
         initialData={{
           appState: { viewBackgroundColor: "#fafafa", theme: "light" },
@@ -52,6 +45,8 @@ export function LessonCanvas({
             export: false,
             saveAsImage: false,
             changeViewBackgroundColor: false,
+            toggleTheme: false,
+            clearCanvas: false,
           },
         }}
       >

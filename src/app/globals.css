@@ -46,3 +46,17 @@
     @apply h-full bg-background text-foreground antialiased;
   }
 }
+
+/* Embedded Excalidraw: same component identity as MainMenu/WelcomeScreen is required
+   so the default fallback menu (J_) is suppressed; we still hide redundant chrome. */
+.excalidraw .main-menu-trigger {
+  display: none;
+}
+
+.excalidraw .ProjectName {
+  display: none;
+}
+
+.excalidraw .layer-ui__wrapper__footer-right {
+  display: none;
+}
