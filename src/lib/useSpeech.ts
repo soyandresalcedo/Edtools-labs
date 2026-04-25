@@ -52,6 +52,37 @@ interface SpeakTask {
    * el momento en que se llama a `speakAsync`.
    */
   onStart?: () => void;
+  /**
+   * Promesa que se "awaitea" justo antes de arrancar la reproducción. Sirve
+   * para sincronizar el inicio del audio con un evento externo (p. ej. que el
+   * worker de dibujos termine de dibujar lo asociado a la frase previa). La
+   * generación/decodificación del buffer NO se bloquea por esto, sólo el
+   * `play()` final.
+   */
+  waitBeforePlay?: Promise<unknown>;
+  /**
+   * Tope superior para el `waitBeforePlay`. Si la promesa no resuelve en este
+   * tiempo, arrancamos el audio igual para evitar silencios encadenados ante
+   * un dibujo que se cuelgue. Default: 1500ms.
+   */
+  waitBeforePlayCapMs?: number;
+}
+
+const DEFAULT_WAIT_BEFORE_PLAY_CAP_MS = 1500;
+
+/**
+ * Espera a `task.waitBeforePlay` con un cap. Devuelve `true` si la espera
+ * se completó por la promesa, `false` si fue por el timeout. Nunca lanza:
+ * un reject en la promesa externa se trata igual que "ya está listo" (porque
+ * el caller del speak no debe romperse si el draw worker tropezó).
+ */
+async function awaitBeforePlay(task: SpeakTask): Promise<void> {
+  if (!task.waitBeforePlay) return;
+  const cap = task.waitBeforePlayCapMs ?? DEFAULT_WAIT_BEFORE_PLAY_CAP_MS;
+  await Promise.race([
+    Promise.resolve(task.waitBeforePlay).catch(() => {}),
+    new Promise<void>((resolve) => setTimeout(resolve, cap)),
+  ]);
 }
 
 /**
@@ -80,6 +111,13 @@ export interface UseSpeech {
       timeoutMs?: number;
       webSpeechLang?: string;
       onStart?: () => void;
+      /**
+       * Promesa que la cola de speech esperará (con tope) ANTES de arrancar
+       * el audio de esta frase. Útil para sincronizar con el draw worker.
+       */
+      waitBeforePlay?: Promise<unknown>;
+      /** Tope para `waitBeforePlay`. Default: 1500ms. */
+      waitBeforePlayCapMs?: number;
     },
   ) => Promise<{ durationMs: number }>;
   cancel: () => void;
@@ -228,6 +266,13 @@ export function useSpeech(): UseSpeech {
   const preferredVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const preferredEsVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const elevenLabsStatusRef = useRef<ElevenLabsStatus>("unknown");
+  /**
+   * Contador de fallos consecutivos del proxy `/api/tts`. Un 503/429 puntual
+   * no debe tirar el motor para el resto de la sesión: sólo marcamos
+   * `blocked` cuando hay 2+ fallos seguidos. Cualquier éxito (prepare ok)
+   * resetea el contador.
+   */
+  const elevenLabsConsecutiveFailsRef = useRef(0);
   const mutedRef = useRef(false);
   const isSpeakingRef = useRef(false);
   const readyWaitersRef = useRef<Array<() => void>>([]);
@@ -346,6 +391,38 @@ export function useSpeech(): UseSpeech {
       cancelled = true;
     };
   }, []);
+
+  // Re-probe periódico mientras estamos `blocked`: si ElevenLabs se cae por un
+  // rato (rate-limit, mantenimiento, hipo de la API), volvemos a `ready` en
+  // cuanto se recupere sin requerir refresh manual del usuario.
+  useEffect(() => {
+    if (elevenLabsStatus !== "blocked") return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch("/api/tts", { method: "GET" });
+        if (cancelled) return;
+        let bodyOk = false;
+        try {
+          const json = (await res.json()) as { ok?: unknown };
+          bodyOk = json?.ok === true;
+        } catch {
+          // ignore
+        }
+        if (bodyOk) {
+          elevenLabsConsecutiveFailsRef.current = 0;
+          setElevenLabsStatus("ready");
+        }
+      } catch {
+        // ignore: seguimos blocked, reintentamos en el próximo tick
+      }
+    }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [elevenLabsStatus]);
 
   const cancel = useCallback(() => {
     queueRef.current.forEach((t) => {
@@ -512,6 +589,13 @@ export function useSpeech(): UseSpeech {
       if (window.speechSynthesis.getVoices().length === 0) {
         await waitForVoices(600);
       }
+      // Sincronización con el caller (e.g. esperar a que el worker de draws
+      // dibuje lo asociado a la frase previa). Tope: `waitBeforePlayCapMs`.
+      await awaitBeforePlay(task);
+      if (task.cancelled || mutedRef.current) {
+        task.resolve?.({ durationMs: 0 });
+        return;
+      }
       await new Promise<void>((resolve) => {
         const utterance = new SpeechSynthesisUtterance(text);
         const lang = task.webSpeechLang ?? "en-US";
@@ -652,6 +736,14 @@ export function useSpeech(): UseSpeech {
             task.resolve?.({ durationMs: 0 });
             return;
           }
+          // Sincronización con el caller: el buffer ya está listo, sólo
+          // esperamos (con tope) a que el draw asociado a la frase previa
+          // termine. Esto NO bloquea el prefetch de la siguiente frase.
+          await awaitBeforePlay(task);
+          if (task.cancelled || mutedRef.current) {
+            task.resolve?.({ durationMs: 0 });
+            return;
+          }
           const source = ctx.createBufferSource();
           source.buffer = buffer;
           source.connect(ctx.destination);
@@ -736,11 +828,27 @@ export function useSpeech(): UseSpeech {
       if (elevenLabsStatusRef.current === "ready") {
         try {
           const prep = await prepareElevenLabs(task);
-          if (prep) return prep;
+          if (prep) {
+            // Éxito de ElevenLabs: limpiamos el contador para que un fallo
+            // aislado posterior no cuente como "consecutivo".
+            elevenLabsConsecutiveFailsRef.current = 0;
+            return prep;
+          }
         } catch (e) {
-          console.warn("[useSpeech] ElevenLabs prepare failed, falling back", e);
-          setElevenLabsStatus("blocked");
-          elevenLabsStatusRef.current = "blocked";
+          elevenLabsConsecutiveFailsRef.current += 1;
+          const fails = elevenLabsConsecutiveFailsRef.current;
+          console.warn(
+            `[useSpeech] ElevenLabs prepare failed (${fails} consecutive), falling back`,
+            e,
+          );
+          // Sólo bloqueamos el motor cuando hay 2 fallos consecutivos. Un 503
+          // aislado (que pasa cuando ElevenLabs hace throttle puntual) cae a
+          // Web Speech sólo en esa frase, pero la siguiente vuelve a intentar
+          // ElevenLabs.
+          if (fails >= 2) {
+            setElevenLabsStatus("blocked");
+            elevenLabsStatusRef.current = "blocked";
+          }
           if (task.cancelled || mutedRef.current) {
             try {
               task.resolve?.({ durationMs: 0 });
@@ -864,6 +972,8 @@ export function useSpeech(): UseSpeech {
         timeoutMs?: number;
         webSpeechLang?: string;
         onStart?: () => void;
+        waitBeforePlay?: Promise<unknown>;
+        waitBeforePlayCapMs?: number;
       },
     ): Promise<{ durationMs: number }> => {
       const timeoutMs = opts?.timeoutMs ?? 30000;
@@ -875,6 +985,8 @@ export function useSpeech(): UseSpeech {
           cancelled: false,
           webSpeechLang: opts?.webSpeechLang,
           onStart: opts?.onStart,
+          waitBeforePlay: opts?.waitBeforePlay,
+          waitBeforePlayCapMs: opts?.waitBeforePlayCapMs,
         };
         const p = new Promise<{ durationMs: number }>((resolve) => {
           task.resolve = resolve;

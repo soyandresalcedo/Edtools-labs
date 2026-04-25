@@ -436,9 +436,19 @@ export function useLessonStream(): UseLessonStream {
               // dispara justo antes de que el audio empiece a sonar.
               speakCount++;
               if (mode === "lab") labAgentLines.push(text);
+              // Snapshot del worker de draws ANTES de encolar el speak: en él
+              // están los dibujos asociados al speak anterior. `useSpeech`
+              // hará `await` (con cap 1500ms) sobre este snapshot ANTES de
+              // arrancar el audio de esta frase, sin bloquear la generación.
+              // El primer speak del turno encuentra el worker resuelto
+              // (`stop()` lo deja en `Promise.resolve()`), así no introduce
+              // gap inicial.
+              const drawWorkerSnapshot = pendingDrawWorkerRef.current;
               const p = speech.speakAsync(text, {
                 timeoutMs: 30000,
                 webSpeechLang: webLang,
+                waitBeforePlay: drawWorkerSnapshot,
+                waitBeforePlayCapMs: 1500,
                 onStart: () => {
                   setStatus("speaking");
                   setCaption(text);

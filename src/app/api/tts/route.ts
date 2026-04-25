@@ -31,6 +31,39 @@ function pickVoiceId(lang: AppLang, override?: string): string | null {
   return env.ELEVENLABS_VOICE_ID_EN ?? env.ELEVENLABS_VOICE_ID ?? null;
 }
 
+/** Status codes upstream que vale la pena reintentar (transitorios). */
+const RETRYABLE_STATUSES = new Set<number>([408, 429, 500, 502, 503, 504]);
+
+/**
+ * Wrapper de `fetch` con un reintento corto para errores transitorios de
+ * ElevenLabs. Cubre los 503/429 puntuales que aparecen cuando la API está
+ * bajo carga o hace throttle. No tocamos los 4xx no-transitorios (400/401/403)
+ * porque indican un problema de configuración o cuota agotada.
+ */
+async function callElevenLabs(
+  url: string,
+  init: RequestInit,
+  attempts = 2,
+): Promise<Response> {
+  let last: Response | null = null;
+  for (let i = 0; i < attempts; i++) {
+    const r = await fetch(url, init);
+    if (r.ok) return r;
+    if (!RETRYABLE_STATUSES.has(r.status)) return r;
+    last = r;
+    if (i < attempts - 1) {
+      // Drenamos el body del intento fallido para no fugar conexiones.
+      try {
+        await r.arrayBuffer();
+      } catch {
+        // ignore
+      }
+      await new Promise((res) => setTimeout(res, 250 * (i + 1)));
+    }
+  }
+  return last!;
+}
+
 /**
  * Health probe ligero: el cliente lo usa para saber si el motor ElevenLabs es
  * elegible sin gastar caracteres. No expone la API key.
@@ -111,7 +144,7 @@ export async function POST(req: Request): Promise<Response> {
 
   let upstream: Response;
   try {
-    upstream = await fetch(url, {
+    upstream = await callElevenLabs(url, {
       method: "POST",
       headers: {
         "xi-api-key": apiKey,
