@@ -53,7 +53,10 @@ try {
     throw new Error(`Missing onnx dist: ${ortDist}`);
   }
 
-  fs.rmSync(outDir, { recursive: true, force: true });
+  // NOTE: NO `rmSync(outDir)` — la carpeta `public/vendors-tts/models/` es
+  // gestionada por `scripts/copy-kokoro-model.cjs` (binarios pesados, ~85 MB).
+  // Hacer rm aquí forzaría re-descargar el modelo en cada `pnpm dev`.
+  // Las copias de runtime (`kokoro.web.js`, ORT) hacen overwrite igualmente.
   fs.mkdirSync(outDir, { recursive: true });
 
   copyFile(kokoroWeb, path.join(outDir, "kokoro.web.js"));

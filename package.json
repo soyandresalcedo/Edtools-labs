@@ -5,11 +5,13 @@
   "description": "Edtools Labs: Claude-powered kinematics tutor that draws on a canvas.",
   "scripts": {
     "copy-tts-assets": "node scripts/copy-tts-assets.cjs",
+    "copy-kokoro-model": "node scripts/copy-kokoro-model.cjs",
+    "prepare-tts": "node scripts/copy-tts-assets.cjs && node scripts/copy-kokoro-model.cjs",
     "print-lan": "node scripts/print-lan-url.cjs",
-    "dev": "node scripts/copy-tts-assets.cjs && node scripts/print-lan-url.cjs && next dev -H 0.0.0.0",
-    "dev:local": "node scripts/copy-tts-assets.cjs && next dev -H 127.0.0.1",
-    "build": "node scripts/copy-tts-assets.cjs && next build",
-    "start": "node scripts/copy-tts-assets.cjs && next start -H 0.0.0.0",
+    "dev": "pnpm prepare-tts && node scripts/print-lan-url.cjs && next dev -H 0.0.0.0",
+    "dev:local": "pnpm prepare-tts && next dev -H 127.0.0.1",
+    "build": "pnpm prepare-tts && next build",
+    "start": "pnpm prepare-tts && next start -H 0.0.0.0",
     "preview": "pnpm build && pnpm start",
     "lint": "next lint",
     "test": "vitest run"

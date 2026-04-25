@@ -15,6 +15,23 @@ const nextConfig = {
   experimental: {
     esmExternals: "loose",
   },
+  // Cache duro para los assets self-hosted de Kokoro/ORT/transformers en
+  // /public/vendors-tts/. Los nombres de archivo encapsulan modelo/revision
+  // (e.g. onnx-community/Kokoro-82M-v1.0-ONNX/onnx/model_quantized.onnx), así
+  // que un cambio de versión cambia la ruta y la cache no aplica al nuevo path.
+  async headers() {
+    return [
+      {
+        source: "/vendors-tts/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+    ];
+  },
   webpack: (config, { isServer }) => {
     config.plugins = config.plugins ?? [];
     // Kokoro pulls @huggingface/transformers; webpack often picks the "node"

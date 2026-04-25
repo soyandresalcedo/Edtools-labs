@@ -2,6 +2,29 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  DEFAULT_KOKORO_VOICE,
+  isKokoroVoiceId,
+  KOKORO_VOICES,
+  VOICE_KEY,
+  type KokoroVoiceId,
+  type KokoroVoicesCatalog,
+} from "./kokoroVoices";
+
+import {
+  getKokoroTTS,
+  type KokoroLoadState,
+  type KokoroTTS,
+  resetKokoroSingleton,
+  subscribeKokoro,
+} from "./kokoroSingleton";
+
+export {
+  KOKORO_VOICES,
+  type KokoroVoiceId,
+  type KokoroVoicesCatalog,
+} from "./kokoroVoices";
+
 export type SpeechEngine = "elevenlabs" | "kokoro" | "webspeech" | "none";
 export type SpeechPhase = "idle" | "generating" | "speaking";
 export type SpeechStatus =
@@ -24,21 +47,7 @@ export const ENGINE_PREF_KEY = "physicsboard.enginePref";
 /** Estado de disponibilidad del proxy `/api/tts` (probe ligero). */
 export type ElevenLabsStatus = "unknown" | "ready" | "unavailable" | "blocked";
 
-export const KOKORO_VOICES = [
-  { id: "af_heart", label: "Heart (warm, friendly)", lang: "en-US" },
-  { id: "af_bella", label: "Bella (warm narrator)", lang: "en-US" },
-  { id: "af_nova", label: "Nova (bright, clear)", lang: "en-US" },
-  { id: "bf_emma", label: "Emma (British female)", lang: "en-GB" },
-  { id: "am_michael", label: "Michael (male, calm)", lang: "en-US" },
-] as const;
-
-export type KokoroVoiceId = (typeof KOKORO_VOICES)[number]["id"];
-export type KokoroVoicesCatalog = typeof KOKORO_VOICES;
-
 const MUTED_KEY = "physicsboard.muted";
-const VOICE_KEY = "physicsboard.voice";
-const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-const DEFAULT_KOKORO_VOICE: KokoroVoiceId = "af_heart";
 
 // #region debug log
 // NOTE: nunca apuntes a localhost desde el cliente: en móviles/HTTPS túneles
@@ -56,15 +65,6 @@ function dbg(
 }
 // #endregion
 
-type KokoroDtype = "fp32" | "fp16" | "q8" | "q4" | "q4f16";
-
-function isKokoroVoiceId(v: string): v is KokoroVoiceId {
-  return KOKORO_VOICES.some((item) => item.id === v);
-}
-
-type KokoroModule = typeof import("kokoro-js");
-type KokoroTTS = InstanceType<KokoroModule["KokoroTTS"]>;
-
 /** Móvil: no se carga Kokoro; UI y retry pueden reconocer este token. */
 export const KOKORO_SKIPPED_MOBILE = "kokoro_skipped_mobile" as const;
 
@@ -74,91 +74,6 @@ interface SpeakTask {
   /** BCP-47, p. ej. "es-419" para Lab; vacío/omitido = inglés (Teach). */
   webSpeechLang?: string;
   resolve?: (value: { durationMs: number }) => void;
-}
-
-function formatInitError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  try {
-    return JSON.stringify(err);
-  } catch {
-    return String(err);
-  }
-}
-
-function kokoroTimeoutMs(): number {
-  // La primera carga puede ser muy pesada en móvil (descarga + parse + compile).
-  // Preferimos tolerancia alta porque la UI ya funciona con Web Speech.
-  return isMobileLike() ? 120_000 : 45_000;
-}
-
-function kokoroInitBudgetMs(): number {
-  // Solo para evitar cuelgues silenciosos. Si hay progreso, dejamos seguir.
-  return isMobileLike() ? 240_000 : 90_000;
-}
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<T> {
-  let t: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_, reject) => {
-        t = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${ms}ms`));
-        }, ms);
-      }),
-    ]);
-  } finally {
-    if (t) clearTimeout(t);
-  }
-}
-
-/** Single-thread WASM avoids SharedArrayBuffer / cross-origin isolation issues. */
-async function configureWasmSingleThread(): Promise<void> {
-  try {
-    const mod = await import("@huggingface/transformers");
-    // #region debug log
-    dbg("useSpeech.ts:configureWasmSingleThread", "transformers imported", { hasEnv: !!mod.env, keys: Object.keys(mod).slice(0, 10) }, "H2");
-    // #endregion
-    const { env } = mod;
-    const wasm = (
-      env as {
-        backends?: { onnx?: { wasm?: { numThreads?: number } } };
-      }
-    ).backends?.onnx?.wasm;
-    if (wasm) wasm.numThreads = 1;
-
-    // Prefer caching in browsers when available (faster second load, less jank).
-    try {
-      (env as any).useBrowserCache = true;
-      (env as any).useWasmCache = true;
-    } catch {
-      // ignore
-    }
-
-    // Point ORT WASM assets to our locally served copies when possible.
-    // This avoids CDN/DNS issues on mobile networks.
-    try {
-      const nextBase = (
-        window as { __NEXT_DATA__?: { basePath?: string } }
-      ).__NEXT_DATA__?.basePath;
-      const base = `${nextBase ?? ""}/vendors-tts/`.replace(/\/\//g, "/");
-      if ((env as any).backends?.onnx?.wasm) {
-        (env as any).backends.onnx.wasm.wasmPaths = base;
-      }
-    } catch {
-      // ignore
-    }
-  } catch (e) {
-    // #region debug log
-    dbg("useSpeech.ts:configureWasmSingleThread", "transformers import FAILED", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? (e.stack ?? "").split("\n").slice(0, 5) : undefined }, "H1");
-    // #endregion
-    console.warn("[useSpeech] transformers WASM preset skipped", e);
-  }
 }
 
 export interface UseSpeech {
@@ -316,27 +231,10 @@ async function waitForVoices(timeoutMs = 600): Promise<void> {
   });
 }
 
-function kokoroLoadAttempts(): Array<{ device: "webgpu" | "wasm"; dtype: KokoroDtype }> {
-  const out: Array<{ device: "webgpu" | "wasm"; dtype: KokoroDtype }> = [];
-  // En móvil priorizamos WASM cuantizado: primer uso suele ser por red/CPU,
-  // y WebGPU+fp32 tiende a ser el camino más caro.
-  if (isMobileLike()) {
-    out.push({ device: "wasm", dtype: "q8" });
-    out.push({ device: "wasm", dtype: "q4f16" });
-    out.push({ device: "wasm", dtype: "q4" });
-    // Android Chrome suele ser más estable con WASM al inicio; si WebGPU es viable
-    // lo dejamos como último intento.
-    if (hasWebGPU()) out.push({ device: "webgpu", dtype: "fp32" });
-  } else {
-    if (hasWebGPU()) {
-      out.push({ device: "webgpu", dtype: "fp32" });
-    }
-    out.push({ device: "wasm", dtype: "q8" });
-    out.push({ device: "wasm", dtype: "q4f16" });
-    out.push({ device: "wasm", dtype: "q4" });
-  }
-  return out;
-}
+// NOTE: Antes había un ladder de intentos `wasm/q8 → wasm/q4f16 → wasm/q4 → webgpu/fp32`.
+// Lo redujimos a `wasm/q8` único dentro del singleton (ver kokoroSingleton.ts).
+// Si q8 falla, el catch del consumer cae a Web Speech como antes. Reactivar
+// WebGPU/fp32 detrás de un feature flag si fuese necesario en el futuro.
 
 export function useSpeech(): UseSpeech {
   // IMPORTANTE (SSR/Hydration): el primer render debe ser idéntico en server y client.
@@ -554,6 +452,9 @@ export function useSpeech(): UseSpeech {
     setKokoroInitError(null);
     setKokoroProgress(null);
     setKokoroStatus("idle");
+    // Limpia la instancia/promesa de módulo para forzar una nueva carga; el
+    // bump de `loadKey` hace que el `useEffect` se vuelva a suscribir.
+    resetKokoroSingleton();
     setLoadKey((k) => k + 1);
   }, [cancel]);
 
@@ -602,178 +503,95 @@ export function useSpeech(): UseSpeech {
   }, [setSpeaking]);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
     let disposed = false;
 
-    async function init() {
-      if (typeof window === "undefined") return;
-
-      // Móvil: no cargar Kokoro; Web Speech con español (Lab) o inglés (Teach) en el utterance.
-      if (isMobileLike()) {
-        if (hasSpeechSynthesis()) {
-          const warmVoices = () => {
-            preferredVoiceRef.current = pickPreferredVoice();
-            const es = pickPreferredVoiceForLang("es-419");
-            if (es && langPrefix(es.lang) === "es") {
-              preferredEsVoiceRef.current = es;
-            }
-          };
-          warmVoices();
-          window.speechSynthesis.onvoiceschanged = warmVoices;
+    // Web Speech warmup (siempre, móvil o desktop): asegura voces en cuanto el
+    // navegador las publica (Chrome dispara `voiceschanged` después del mount).
+    if (hasSpeechSynthesis()) {
+      const warmVoices = () => {
+        preferredVoiceRef.current = pickPreferredVoice();
+        const es = pickPreferredVoiceForLang("es-419");
+        if (es && langPrefix(es.lang) === "es") {
+          preferredEsVoiceRef.current = es;
         }
-        ttsRef.current = null;
-        setKokoroProgress(null);
-        setKokoroInitError(KOKORO_SKIPPED_MOBILE);
-        setKokoroStatus("failed");
-        // #region debug log
-        dbg("useSpeech.ts:init", "mobile: Kokoro skipped, Web Speech only", {}, "H0");
-        // #endregion
-        return;
-      }
+      };
+      warmVoices();
+      window.speechSynthesis.onvoiceschanged = warmVoices;
+    }
 
-      setKokoroStatus("loading");
+    // Móvil: bypass Kokoro completo. Web Speech ya está caliente.
+    if (isMobileLike()) {
+      ttsRef.current = null;
       setKokoroProgress(null);
-      setKokoroInitError(null);
-
-      // Reduce ORT noise in consoles by default.
-      // NOTE: onnxruntime-web typings are not exported cleanly in our pinned dev build,
-      // so we avoid importing it directly here to keep TypeScript happy.
-
-      if (hasSpeechSynthesis()) {
-        const warmVoices = () => {
-          preferredVoiceRef.current = pickPreferredVoice();
-          const es = pickPreferredVoiceForLang("es-419");
-          if (es && langPrefix(es.lang) === "es") {
-            preferredEsVoiceRef.current = es;
-          }
-        };
-        warmVoices();
-        window.speechSynthesis.onvoiceschanged = warmVoices;
-      }
-
+      setKokoroInitError(KOKORO_SKIPPED_MOBILE);
+      setKokoroStatus("failed");
       // #region debug log
-      dbg("useSpeech.ts:init", "start", { hasWebGPU: hasWebGPU(), hasSpeech: hasSpeechSynthesis(), ua: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "n/a" }, "H1");
+      dbg("useSpeech.ts:init", "mobile: Kokoro skipped, Web Speech only", {}, "H0");
       // #endregion
-      try {
-        await configureWasmSingleThread();
-        if (disposed) return;
+      return () => {
+        disposed = true;
+      };
+    }
 
-        // #region debug log
-        dbg("useSpeech.ts:init", "importing kokoro-js (static /vendors-tts)", {}, "H1");
-        // #endregion
-        // Carga nativa: evita que Webpack empaquete Kokoro+ORT (new URL relative a import.meta
-        // rompe con factory undefined). Assets en public/ vía scripts/copy-tts-assets.cjs.
-        const nextBase = (
-          window as { __NEXT_DATA__?: { basePath?: string } }
-        ).__NEXT_DATA__?.basePath;
-        const kokoroPath = `${nextBase ?? ""}/vendors-tts/kokoro.web.js`.replace(
-          /\/\//g,
-          "/",
-        );
-        const mod = (await import(
-          /* webpackIgnore: true */
-          new URL(kokoroPath, window.location.origin).href
-        )) as typeof import("kokoro-js");
-        if (disposed) return;
-        // #region debug log
-        dbg("useSpeech.ts:init", "kokoro-js imported", { hasKokoroTTS: !!mod.KokoroTTS, modKeys: Object.keys(mod).slice(0, 10) }, "H1");
-        // #endregion
+    // Desktop: delegar al singleton de módulo. Múltiples mounts comparten una
+    // misma instancia (la primera dispara la carga, las siguientes reutilizan).
+    // #region debug log
+    dbg("useSpeech.ts:init", "subscribing to kokoroSingleton", { hasWebGPU: hasWebGPU(), hasSpeech: hasSpeechSynthesis(), ua: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "n/a" }, "H1");
+    // #endregion
 
-        let lastErr: unknown;
-        const attempts = kokoroLoadAttempts();
-        const initStartedAt = performance.now();
-        let lastProgressAt = performance.now();
+    const unsubscribe = subscribeKokoro((s: KokoroLoadState) => {
+      if (disposed) return;
+      switch (s.status) {
+        case "idle":
+          setKokoroStatus("idle");
+          setKokoroProgress(null);
+          break;
+        case "loading":
+          setKokoroStatus("loading");
+          setKokoroProgress(s.progress);
+          break;
+        case "ready":
+          setKokoroInitError(null);
+          setKokoroProgress(1);
+          setKokoroStatus("ready");
+          break;
+        case "failed":
+          setKokoroInitError(s.error);
+          setKokoroStatus("failed");
+          break;
+      }
+    });
+
+    void getKokoroTTS()
+      .then((tts: KokoroTTS) => {
+        if (disposed) return;
+        ttsRef.current = tts;
+        setEngine("kokoro");
         // #region debug log
-        dbg("useSpeech.ts:init", "load attempts plan", { attempts, count: attempts.length }, "H4");
+        dbg("useSpeech.ts:init", "KOKORO READY (via singleton)", {}, "H3");
         // #endregion
-        for (const { device, dtype } of attempts) {
-          if (disposed) return;
-          const budgetMs = kokoroInitBudgetMs();
-          const now = performance.now();
-          const recentlyProgressing = now - lastProgressAt < 12_000;
-          if (!recentlyProgressing && now - initStartedAt > budgetMs) {
-            throw new Error(
-              `Kokoro: exceeded init budget (${budgetMs}ms)`,
-            );
-          }
-          // #region debug log
-          dbg("useSpeech.ts:init", "attempt start", { device, dtype }, "H4");
-          // #endregion
-          try {
-            const tts = await withTimeout(
-              mod.KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-                dtype,
-                device,
-                progress_callback: (p: unknown) => {
-                  try {
-                    const loaded = Number((p as any)?.loaded ?? NaN);
-                    const total = Number((p as any)?.total ?? NaN);
-                    if (
-                      Number.isFinite(loaded) &&
-                      Number.isFinite(total) &&
-                      total > 0
-                    ) {
-                      const frac = Math.max(0, Math.min(1, loaded / total));
-                      lastProgressAt = performance.now();
-                      if (!disposed) setKokoroProgress(frac);
-                    }
-                  } catch {
-                    // ignore
-                  }
-                },
-              }),
-              kokoroTimeoutMs(),
-              `KokoroTTS.from_pretrained(${device}/${dtype})`,
-            );
-            if (disposed) return;
-            ttsRef.current = tts;
-            setEngine("kokoro");
-            setKokoroInitError(null);
-            setKokoroStatus("ready");
-            // #region debug log
-            dbg("useSpeech.ts:init", "KOKORO READY", { device, dtype }, "H3");
-            // #endregion
-            // No warmup en el camino crítico (móvil): puede empeorar la UX.
-            return;
-          } catch (e) {
-            lastErr = e;
-            // #region debug log
-            dbg("useSpeech.ts:init", "attempt FAILED", {
-              device,
-              dtype,
-              errorName: e instanceof Error ? e.name : typeof e,
-              errorMsg: e instanceof Error ? e.message : String(e),
-              errorStack: e instanceof Error ? (e.stack ?? "").split("\n").slice(0, 8) : undefined,
-            }, "H4");
-            // #endregion
-            console.warn(`[useSpeech] Kokoro load failed (${device}/${dtype})`, e);
-          }
-        }
-        throw lastErr ?? new Error("Kokoro: all load attempts failed");
-      } catch (err) {
+      })
+      .catch((err: unknown) => {
+        if (disposed) return;
         console.warn("[useSpeech] Kokoro load failed, falling back", err);
-        if (disposed) return;
         // #region debug log
         dbg("useSpeech.ts:init", "FALLBACK to webspeech", {
           errorName: err instanceof Error ? err.name : typeof err,
           errorMsg: err instanceof Error ? err.message : String(err),
-          errorStack: err instanceof Error ? (err.stack ?? "").split("\n").slice(0, 8) : undefined,
         }, "H1");
         // #endregion
-        setKokoroInitError(formatInitError(err));
         ttsRef.current = null;
-        setKokoroStatus("failed");
-        // La UX no debe depender de Kokoro. Si no hay Web Speech, sí degradamos.
         if (!hasSpeechSynthesis()) {
           setEngine("none");
           setStatus("unavailable");
         }
-      }
-    }
-
-    void init();
+      });
 
     return () => {
       disposed = true;
+      unsubscribe();
     };
   }, [loadKey]);
 
@@ -844,7 +662,12 @@ export function useSpeech(): UseSpeech {
       if (!tts) throw new Error("Kokoro not ready");
       setPhase("generating");
       const gen0 = performance.now();
-      const audio = await tts.generate(text, { voice: voiceRef.current });
+      // Cast: kokoro-js tipa `voice` como literal union del catálogo completo;
+      // nuestra fuente canónica es kokoroVoices.json, validada con isKokoroVoiceId.
+      type GenerateOpts = NonNullable<Parameters<KokoroTTS["generate"]>[1]>;
+      const audio = await tts.generate(text, {
+        voice: voiceRef.current as GenerateOpts["voice"],
+      });
       const genMs = Math.round(performance.now() - gen0);
       // #region debug log
       dbg(
