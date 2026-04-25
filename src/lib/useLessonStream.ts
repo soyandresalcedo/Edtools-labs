@@ -23,6 +23,8 @@ import {
 import type { ToolName } from "@/lib/tools";
 import {
   useSpeech,
+  type ElevenLabsStatus,
+  type EnginePref,
   type KokoroVoiceId,
   type KokoroVoicesCatalog,
   type SpeechEngine,
@@ -155,6 +157,9 @@ export interface UseLessonStream {
   voice: KokoroVoiceId;
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
+  enginePref: EnginePref;
+  setEnginePref: (next: EnginePref) => void;
+  elevenLabsStatus: ElevenLabsStatus;
   lang: AppLang;
   setLang: (lang: AppLang) => void;
   ask(question: string): Promise<void>;
@@ -209,6 +214,15 @@ export function useLessonStream(): UseLessonStream {
     setLangState(initial);
     langRef.current = initial;
   }, []);
+
+  // Mantener `<html lang>` alineado con AppLang. El layout es server-rendered con
+  // lang="en" (estable para hydration); aquí lo actualizamos post-mount para
+  // accesibilidad y para que el navegador escoja la pronunciación correcta de
+  // textos sin lang explícito.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.documentElement.lang = lang === "es" ? "es" : "en";
+  }, [lang]);
 
   const setLang = useCallback((next: AppLang) => {
     setLangState(next);
@@ -714,6 +728,9 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
     voice: speech.voice,
     setVoice: speech.setVoice,
     voices: speech.voices,
+    enginePref: speech.enginePref,
+    setEnginePref: speech.setEnginePref,
+    elevenLabsStatus: speech.elevenLabsStatus,
     lang,
     setLang,
     ask,

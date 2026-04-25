@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type SpeechEngine = "kokoro" | "webspeech" | "none";
+export type SpeechEngine = "elevenlabs" | "kokoro" | "webspeech" | "none";
 export type SpeechPhase = "idle" | "generating" | "speaking";
 export type SpeechStatus =
   | "idle"
@@ -12,6 +12,17 @@ export type SpeechStatus =
   | "unavailable";
 
 export type KokoroStatus = "idle" | "loading" | "ready" | "failed";
+
+/**
+ * Preferencia explícita del usuario para el motor de voz.
+ * - "auto": comportamiento Fase 1 (Kokoro EN, Web Speech ES).
+ * - "elevenlabs": prioriza ElevenLabs; si falla, cae al motor automático.
+ */
+export type EnginePref = "auto" | "elevenlabs";
+export const ENGINE_PREF_KEY = "physicsboard.enginePref";
+
+/** Estado de disponibilidad del proxy `/api/tts` (probe ligero). */
+export type ElevenLabsStatus = "unknown" | "ready" | "unavailable" | "blocked";
 
 export const KOKORO_VOICES = [
   { id: "af_heart", label: "Heart (warm, friendly)", lang: "en-US" },
@@ -172,6 +183,11 @@ export interface UseSpeech {
   isSpeaking: boolean;
   kokoroInitError: string | null;
   retryKokoro: () => void;
+  /** Preferencia explícita del usuario (auto vs elevenlabs). */
+  enginePref: EnginePref;
+  setEnginePref: (next: EnginePref) => void;
+  /** Disponibilidad del proxy /api/tts (clave de API en server, etc). */
+  elevenLabsStatus: ElevenLabsStatus;
 }
 
 function hasWebGPU(): boolean {
@@ -252,6 +268,54 @@ function isMobileLike(): boolean {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 }
 
+/** Devuelve el prefijo BCP-47 ("en", "es", …). */
+function langPrefix(bcp47: string): string {
+  return (bcp47 ?? "").toLowerCase().slice(0, 2);
+}
+
+/** True si la voz comparte familia de idioma con el utterance.lang. */
+function voiceMatchesLang(
+  voice: SpeechSynthesisVoice,
+  utteranceLang: string,
+): boolean {
+  return langPrefix(voice.lang) === langPrefix(utteranceLang);
+}
+
+/**
+ * Espera (con tope corto) a que `speechSynthesis.getVoices()` devuelva voces.
+ * En Chrome/Edge la primera llamada tras el mount suele venir vacía hasta que
+ * dispara `voiceschanged`; sin esto el primer `speak` cae a fallback EN.
+ */
+async function waitForVoices(timeoutMs = 600): Promise<void> {
+  if (!hasSpeechSynthesis()) return;
+  if (window.speechSynthesis.getVoices().length > 0) return;
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    const handler = () => {
+      clearTimeout(timer);
+      try {
+        window.speechSynthesis.removeEventListener("voiceschanged", handler);
+      } catch {
+        // ignore
+      }
+      finish();
+    };
+    try {
+      window.speechSynthesis.addEventListener("voiceschanged", handler, {
+        once: true,
+      });
+    } catch {
+      // Safari antiguo: el setTimeout cubre el caso.
+    }
+  });
+}
+
 function kokoroLoadAttempts(): Array<{ device: "webgpu" | "wasm"; dtype: KokoroDtype }> {
   const out: Array<{ device: "webgpu" | "wasm"; dtype: KokoroDtype }> = [];
   // En móvil priorizamos WASM cuantizado: primer uso suele ser por red/CPU,
@@ -288,6 +352,9 @@ export function useSpeech(): UseSpeech {
   const [kokoroInitError, setKokoroInitError] = useState<string | null>(null);
   const [loadKey, setLoadKey] = useState(0);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [enginePref, setEnginePrefState] = useState<EnginePref>("auto");
+  const [elevenLabsStatus, setElevenLabsStatus] =
+    useState<ElevenLabsStatus>("unknown");
 
   const ttsRef = useRef<KokoroTTS | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -295,6 +362,9 @@ export function useSpeech(): UseSpeech {
   const queueRef = useRef<SpeakTask[]>([]);
   const runningRef = useRef(false);
   const preferredVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const preferredEsVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const enginePrefRef = useRef<EnginePref>("auto");
+  const elevenLabsStatusRef = useRef<ElevenLabsStatus>("unknown");
   const mutedRef = useRef(false);
   const voiceRef = useRef<KokoroVoiceId>(DEFAULT_KOKORO_VOICE);
   const isSpeakingRef = useRef(false);
@@ -310,6 +380,14 @@ export function useSpeech(): UseSpeech {
     engineRef.current = engine;
     statusRef.current = status;
   }, [engine, status]);
+
+  useEffect(() => {
+    enginePrefRef.current = enginePref;
+  }, [enginePref]);
+
+  useEffect(() => {
+    elevenLabsStatusRef.current = elevenLabsStatus;
+  }, [elevenLabsStatus]);
 
   // Habilita Web Speech inmediatamente *después* del mount (evita hydration mismatch).
   useEffect(() => {
@@ -390,11 +468,50 @@ export function useSpeech(): UseSpeech {
     } catch {
       // ignore
     }
+    try {
+      const storedPref = localStorage.getItem(ENGINE_PREF_KEY);
+      if (storedPref === "elevenlabs" || storedPref === "auto") {
+        setEnginePrefState(storedPref);
+        enginePrefRef.current = storedPref;
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   useEffect(() => {
     if (statusRef.current === "ready" && engineRef.current !== "none") notifyReady();
   }, [engine, notifyReady, status]);
+
+  // Probe pasivo de /api/tts (sin gastar tokens): GET barato. Si la API no está
+  // configurada en server, marca el motor como `unavailable` para que la UI no
+  // ofrezca el toggle.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/tts", { method: "GET" });
+        if (cancelled) return;
+        setElevenLabsStatus(res.ok ? "ready" : "unavailable");
+      } catch {
+        if (cancelled) return;
+        setElevenLabsStatus("unavailable");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setEnginePref = useCallback((next: EnginePref) => {
+    setEnginePrefState(next);
+    enginePrefRef.current = next;
+    try {
+      localStorage.setItem(ENGINE_PREF_KEY, next);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const cancel = useCallback(() => {
     queueRef.current.forEach((t) => {
@@ -487,7 +604,10 @@ export function useSpeech(): UseSpeech {
         if (hasSpeechSynthesis()) {
           const warmVoices = () => {
             preferredVoiceRef.current = pickPreferredVoice();
-            void pickPreferredVoiceForLang("es-419");
+            const es = pickPreferredVoiceForLang("es-419");
+            if (es && langPrefix(es.lang) === "es") {
+              preferredEsVoiceRef.current = es;
+            }
           };
           warmVoices();
           window.speechSynthesis.onvoiceschanged = warmVoices;
@@ -513,7 +633,10 @@ export function useSpeech(): UseSpeech {
       if (hasSpeechSynthesis()) {
         const warmVoices = () => {
           preferredVoiceRef.current = pickPreferredVoice();
-          void pickPreferredVoiceForLang("es-419");
+          const es = pickPreferredVoiceForLang("es-419");
+          if (es && langPrefix(es.lang) === "es") {
+            preferredEsVoiceRef.current = es;
+          }
         };
         warmVoices();
         window.speechSynthesis.onvoiceschanged = warmVoices;
@@ -798,18 +921,36 @@ export function useSpeech(): UseSpeech {
 
   const playWithWebSpeech = useCallback(async (text: string, task: SpeakTask) => {
     if (!hasSpeechSynthesis()) return;
+    // Si todavía no llegaron las voces (común en Chrome/Edge en el primer turno),
+    // esperamos un poco a `voiceschanged` antes de elegir una. Sin esto, español
+    // termina hablando con voz inglesa hasta el segundo turno.
+    if (window.speechSynthesis.getVoices().length === 0) {
+      await waitForVoices(600);
+    }
     await new Promise<void>((resolve) => {
       const utterance = new SpeechSynthesisUtterance(text);
       const lang = task.webSpeechLang ?? "en-US";
+      const wantsEs = langPrefix(lang) === "es";
       utterance.lang = lang;
       utterance.rate = 0.97;
       utterance.pitch = 1.0;
       utterance.volume = 1;
-      const v =
+
+      // Selección de voz "segura": preferimos una que coincida con el idioma del
+      // utterance. Si no hay coincidencia (p. ej. Chrome aún sin voces es-*),
+      // dejamos `utterance.voice` sin asignar para que el SO elija por `lang`,
+      // en vez de forzar una voz EN cuando se pidió ES.
+      const candidate =
+        (wantsEs ? preferredEsVoiceRef.current : null) ??
         pickPreferredVoiceForLang(lang) ??
-        preferredVoiceRef.current ??
-        pickPreferredVoice();
-      if (v) utterance.voice = v;
+        (wantsEs ? null : preferredVoiceRef.current) ??
+        (wantsEs ? null : pickPreferredVoice());
+      if (candidate && voiceMatchesLang(candidate, lang)) {
+        utterance.voice = candidate;
+        if (wantsEs && !preferredEsVoiceRef.current) {
+          preferredEsVoiceRef.current = candidate;
+        }
+      }
       const start = performance.now();
       utterance.onend = () => {
         const durationMs = Math.max(0, Math.round(performance.now() - start));
@@ -843,6 +984,82 @@ export function useSpeech(): UseSpeech {
     });
   }, [setSpeaking]);
 
+  const playWithElevenLabs = useCallback(
+    async (text: string, task: SpeakTask) => {
+      const lang = langPrefix(task.webSpeechLang ?? "en-US") === "es" ? "es" : "en";
+      setPhase("generating");
+      const t0 = performance.now();
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, lang }),
+      });
+      if (!res.ok || !res.body) {
+        const detail = await res.text().catch(() => "");
+        throw new Error(`elevenlabs proxy ${res.status}: ${detail.slice(0, 200)}`);
+      }
+      const arrayBuf = await res.arrayBuffer();
+      const genMs = Math.round(performance.now() - t0);
+      // #region debug log
+      dbg(
+        "useSpeech.ts:playWithElevenLabs",
+        "fetched",
+        { genMs, bytes: arrayBuf.byteLength, lang, textLen: text.length },
+        "E1",
+      );
+      // #endregion
+      if (task.cancelled || mutedRef.current) return;
+      const ctx = ensureAudioCtx();
+      if (!ctx) throw new Error("AudioContext unavailable");
+      if (ctx.state !== "running") {
+        await unlock({ timeoutMs: 2500 });
+      }
+      if (task.cancelled || mutedRef.current) return;
+      const buffer = await ctx.decodeAudioData(arrayBuf.slice(0));
+      if (task.cancelled || mutedRef.current) return;
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      activeSourceRef.current = source;
+      const durationMs = Math.round(buffer.duration * 1000);
+      setSpeaking(true);
+      setPhase("speaking");
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          resolve();
+        };
+        const watchdogMs = Math.max(800, durationMs + 800);
+        const t = setTimeout(() => {
+          try {
+            source.stop();
+          } catch {
+            // ignore
+          }
+          finish();
+        }, watchdogMs);
+        source.onended = () => {
+          clearTimeout(t);
+          finish();
+        };
+        try {
+          source.start();
+        } catch (e) {
+          console.warn("[useSpeech] elevenlabs source.start failed", e);
+          clearTimeout(t);
+          finish();
+        }
+      });
+      if (activeSourceRef.current === source) activeSourceRef.current = null;
+      if (isSpeakingRef.current) setSpeaking(false);
+      setPhase("idle");
+      task.resolve?.({ durationMs });
+    },
+    [ensureAudioCtx, setSpeaking, unlock],
+  );
+
   const drainQueue = useCallback(async () => {
     if (runningRef.current) return;
     runningRef.current = true;
@@ -851,8 +1068,45 @@ export function useSpeech(): UseSpeech {
         const task = queueRef.current.shift()!;
         if (task.cancelled || mutedRef.current) continue;
 
+        // Política de motor por turno:
+        // 1. Si el usuario eligió ElevenLabs y el proxy está listo → ElevenLabs.
+        // 2. Si el turno pide inglés y Kokoro está cargado → Kokoro (Fase 1).
+        // 3. Resto → Web Speech (cubre ES + cualquier fallback).
+        const wantsEnglish = langPrefix(task.webSpeechLang ?? "en-US") === "en";
+        const tryElevenFirst =
+          enginePrefRef.current === "elevenlabs" &&
+          elevenLabsStatusRef.current === "ready";
+        const useKokoro = !tryElevenFirst && !!ttsRef.current && wantsEnglish;
+
         try {
-          if (ttsRef.current) {
+          if (tryElevenFirst) {
+            try {
+              await playWithElevenLabs(task.text, task);
+              continue;
+            } catch (e) {
+              console.warn("[useSpeech] ElevenLabs failed, falling back", e);
+              // Marcamos bloqueado para que la UI muestre el motivo, pero NO
+              // cambiamos enginePref: el usuario sigue queriendo ElevenLabs.
+              setElevenLabsStatus("blocked");
+              elevenLabsStatusRef.current = "blocked";
+              if (task.cancelled || mutedRef.current) {
+                task.resolve?.({ durationMs: 0 });
+                continue;
+              }
+              // Fall-through a Kokoro/WebSpeech como red de seguridad.
+              const fallbackUseKokoro = !!ttsRef.current && wantsEnglish;
+              if (fallbackUseKokoro) {
+                await playWithKokoro(task.text, task);
+              } else if (hasSpeechSynthesis()) {
+                await playWithWebSpeech(task.text, task);
+              } else {
+                task.resolve?.({ durationMs: 0 });
+              }
+              continue;
+            }
+          }
+
+          if (useKokoro) {
             await playWithKokoro(task.text, task);
           } else if (hasSpeechSynthesis()) {
             await playWithWebSpeech(task.text, task);
@@ -876,7 +1130,7 @@ export function useSpeech(): UseSpeech {
     } finally {
       runningRef.current = false;
     }
-  }, [playWithKokoro, playWithWebSpeech]);
+  }, [playWithElevenLabs, playWithKokoro, playWithWebSpeech]);
 
   const speakAsync = useCallback(
     async (text: string, opts?: { timeoutMs?: number; webSpeechLang?: string }): Promise<{ durationMs: number }> => {
@@ -966,5 +1220,8 @@ export function useSpeech(): UseSpeech {
     isSpeaking,
     kokoroInitError,
     retryKokoro,
+    enginePref,
+    setEnginePref,
+    elevenLabsStatus,
   };
 }

@@ -2,6 +2,7 @@
 node_modules
 /.next
 /out
+/.pnpm-store
 
 # TTS: generado con pnpm run copy-tts-assets (Kokoro + ORT, ~40MB)
 /public/vendors-tts

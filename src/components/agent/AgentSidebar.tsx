@@ -26,6 +26,8 @@ import type {
 } from "@/lib/useLessonStream";
 import {
   KOKORO_SKIPPED_MOBILE,
+  type ElevenLabsStatus,
+  type EnginePref,
   type KokoroVoiceId,
   type KokoroVoicesCatalog,
   type SpeechEngine,
@@ -61,6 +63,9 @@ export function AgentSidebar({
   voice,
   setVoice,
   voices,
+  enginePref,
+  setEnginePref,
+  elevenLabsStatus,
   lang,
   setLang,
   onAsk,
@@ -90,6 +95,9 @@ export function AgentSidebar({
   voice: KokoroVoiceId;
   setVoice: (id: KokoroVoiceId) => void;
   voices: KokoroVoicesCatalog;
+  enginePref: EnginePref;
+  setEnginePref: (next: EnginePref) => void;
+  elevenLabsStatus: ElevenLabsStatus;
   lang: AppLang;
   setLang: (lang: AppLang) => void;
   onAsk: (q: string) => void;
@@ -140,18 +148,31 @@ export function AgentSidebar({
     }).filter(Boolean);
   }, [progressSnap, lang]);
 
+  const activeEngineLabel =
+    enginePref === "elevenlabs" && elevenLabsStatus === "ready"
+      ? "ElevenLabs"
+      : speechEngine === "kokoro"
+        ? "Kokoro"
+        : lang === "es"
+          ? "navegador"
+          : "browser";
+
   const voiceLabel =
     speechStatus === "loading"
-      ? "Loading natural voice..."
+      ? lang === "es"
+        ? "Cargando voz natural..."
+        : "Loading natural voice..."
       : speechStatus === "unavailable"
-        ? "Voice unavailable on this device"
-        : speechEngine === "kokoro"
-          ? muted
-            ? "Voice muted (Kokoro) - click to unmute"
-            : "Natural voice (Kokoro) - click to mute"
-          : muted
-            ? "Voice muted (browser) - click to unmute"
-            : "Browser voice - click to mute";
+        ? lang === "es"
+          ? "Voz no disponible en este dispositivo"
+          : "Voice unavailable on this device"
+        : muted
+          ? lang === "es"
+            ? `Voz silenciada (${activeEngineLabel}) — clic para activar`
+            : `Voice muted (${activeEngineLabel}) - click to unmute`
+          : lang === "es"
+            ? `Voz (${activeEngineLabel}) — clic para silenciar`
+            : `Voice (${activeEngineLabel}) - click to mute`;
 
   const voiceDisabled =
     speechStatus === "loading" || speechStatus === "unavailable";
@@ -230,12 +251,14 @@ export function AgentSidebar({
                 size="icon"
                 onClick={onNewLesson}
                 disabled={isBusy && log.length === 0}
-                aria-label="New lesson"
+                aria-label={lang === "es" ? "Nueva lección" : "New lesson"}
               >
                 <Plus className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>New lesson</TooltipContent>
+            <TooltipContent>
+              {lang === "es" ? "Nueva lección" : "New lesson"}
+            </TooltipContent>
           </Tooltip>
           {onCollapse ? (
             <Tooltip>
@@ -245,30 +268,84 @@ export function AgentSidebar({
                   variant="ghost"
                   size="icon"
                   onClick={onCollapse}
-                  aria-label="Focus mode"
+                  aria-label={
+                    lang === "es" ? "Modo enfocado" : "Focus mode"
+                  }
                   className="hidden md:inline-flex"
                 >
                   <PanelLeftClose className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Focus mode (hide sidebar)</TooltipContent>
+              <TooltipContent>
+                {lang === "es"
+                  ? "Modo enfocado (ocultar barra)"
+                  : "Focus mode (hide sidebar)"}
+              </TooltipContent>
             </Tooltip>
           ) : null}
         </div>
       </header>
 
+      {elevenLabsStatus === "ready" || enginePref === "elevenlabs" ? (
+        <div className="border-b px-4 py-2">
+          <label
+            htmlFor="engine-pref-select"
+            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
+          >
+            {lang === "es" ? "Motor de voz" : "Voice engine"}
+          </label>
+          <select
+            id="engine-pref-select"
+            className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            value={enginePref}
+            onChange={(e) => setEnginePref(e.target.value as EnginePref)}
+            disabled={status === "speaking"}
+            aria-label={lang === "es" ? "Motor de voz" : "Voice engine"}
+          >
+            <option value="auto">
+              {lang === "es" ? "Automático (Kokoro / Sistema)" : "Auto (Kokoro / System)"}
+            </option>
+            <option value="elevenlabs" disabled={elevenLabsStatus !== "ready"}>
+              ElevenLabs{elevenLabsStatus !== "ready"
+                ? lang === "es"
+                  ? " (no disponible)"
+                  : " (unavailable)"
+                : ""}
+            </option>
+          </select>
+          {enginePref === "elevenlabs" && elevenLabsStatus === "ready" ? (
+            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
+              {lang === "es"
+                ? "ElevenLabs activo. Genera audio en la nube en EN y ES; consume cuota de tu cuenta."
+                : "ElevenLabs active. Cloud-generated audio in EN and ES; counts against your account quota."}
+            </p>
+          ) : null}
+          {enginePref === "elevenlabs" && elevenLabsStatus === "blocked" ? (
+            <p className="mt-2 text-[10px] leading-snug text-destructive">
+              {lang === "es"
+                ? "ElevenLabs falló en el último turno; usando voz de respaldo. Revisa la consola o tu cuota."
+                : "ElevenLabs failed on the last turn; using backup voice. Check the console or your quota."}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       {speechEngine === "webspeech" && kokoroStatus === "loading" ? (
         <div className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
           <p className="mb-1">
-            Loading Kokoro in the background. You can keep using the app with your
-            system voice in the meantime.
+            {lang === "es"
+              ? "Cargando Kokoro en segundo plano. Mientras tanto puedes usar la app con la voz de tu sistema."
+              : "Loading Kokoro in the background. You can keep using the app with your system voice in the meantime."}
           </p>
           <p className="mb-1 text-[10px] text-muted-foreground/90">
-            First load on mobile can take a couple minutes (large model download).
+            {lang === "es"
+              ? "La primera carga en móvil puede tomar un par de minutos (modelo grande)."
+              : "First load on mobile can take a couple minutes (large model download)."}
           </p>
           {typeof kokoroProgress === "number" ? (
             <p className="text-[10px] text-muted-foreground/90">
-              Progress: <strong>{Math.round(kokoroProgress * 100)}%</strong>
+              {lang === "es" ? "Progreso: " : "Progress: "}
+              <strong>{Math.round(kokoroProgress * 100)}%</strong>
             </p>
           ) : null}
         </div>
@@ -280,7 +357,7 @@ export function AgentSidebar({
             htmlFor="kokoro-voice-select"
             className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground"
           >
-            Kokoro voice
+            {lang === "es" ? "Voz Kokoro" : "Kokoro voice"}
           </label>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -290,8 +367,12 @@ export function AgentSidebar({
                   className="h-9 w-full cursor-pointer rounded-md border border-input bg-background px-2 text-xs text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={voice}
                   onChange={(e) => setVoice(e.target.value as KokoroVoiceId)}
-                  disabled={status === "speaking"}
-                  aria-label="Kokoro voice — preview on next caption"
+                  disabled={status === "speaking" || lang === "es"}
+                  aria-label={
+                    lang === "es"
+                      ? "Voz Kokoro — vista previa en la próxima frase"
+                      : "Kokoro voice — preview on next caption"
+                  }
                 >
                   {voices.map((v) => (
                     <option key={v.id} value={v.id}>
@@ -301,8 +382,18 @@ export function AgentSidebar({
                 </select>
               </span>
             </TooltipTrigger>
-            <TooltipContent>Voice — preview on next caption</TooltipContent>
+            <TooltipContent>
+              {lang === "es"
+                ? "Voz — vista previa en la próxima frase"
+                : "Voice — preview on next caption"}
+            </TooltipContent>
           </Tooltip>
+          {lang === "es" ? (
+            <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
+              Kokoro solo está disponible en inglés. Para español usamos la voz
+              del sistema automáticamente.
+            </p>
+          ) : null}
         </div>
       ) : speechEngine === "webspeech" && speechStatus === "ready" ? (
         <div className="border-b px-4 py-2 text-[11px] leading-snug text-muted-foreground">
@@ -323,14 +414,14 @@ export function AgentSidebar({
           ) : (
             <>
               <p className="mb-2">
-                Kokoro is not available right now, so you are hearing your
-                system&apos;s built-in speech instead. You can keep using the
-                app normally.
+                {lang === "es"
+                  ? "Kokoro no está disponible ahora mismo, así que estás oyendo la voz integrada del sistema. Puedes seguir usando la app con normalidad."
+                  : "Kokoro is not available right now, so you are hearing your system's built-in speech instead. You can keep using the app normally."}
               </p>
               <p className="mb-2 text-[10px] text-muted-foreground/90">
-                Tip: on mobile, the first Kokoro load can take a while. If it
-                keeps failing, try Wi‑Fi vs data, disable Data Saver/VPN/DNS
-                blockers, then tap Retry.
+                {lang === "es"
+                  ? "Tip: en móvil, la primera carga de Kokoro puede tardar. Si sigue fallando, prueba Wi‑Fi vs datos, desactiva Ahorro de datos/VPN/bloqueadores de DNS y toca Reintentar."
+                  : "Tip: on mobile, the first Kokoro load can take a while. If it keeps failing, try Wi‑Fi vs data, disable Data Saver/VPN/DNS blockers, then tap Retry."}
               </p>
             </>
           )}
@@ -347,7 +438,7 @@ export function AgentSidebar({
               className="h-8 w-full text-xs"
               onClick={() => retryKokoro()}
             >
-              Retry Kokoro
+              {lang === "es" ? "Reintentar Kokoro" : "Retry Kokoro"}
             </Button>
           ) : null}
         </div>
@@ -429,7 +520,14 @@ export function AgentSidebar({
   );
 }
 
-export function FocusOpenButton({ onOpen }: { onOpen: () => void }) {
+export function FocusOpenButton({
+  onOpen,
+  lang = "en",
+}: {
+  onOpen: () => void;
+  lang?: AppLang;
+}) {
+  const label = lang === "es" ? "Mostrar barra" : "Show sidebar";
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -438,13 +536,13 @@ export function FocusOpenButton({ onOpen }: { onOpen: () => void }) {
           variant="secondary"
           size="icon"
           onClick={onOpen}
-          aria-label="Show sidebar"
+          aria-label={label}
           className="absolute left-4 top-4 z-20 shadow"
         >
           <Expand className="h-4 w-4" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="right">Show sidebar</TooltipContent>
+      <TooltipContent side="right">{label}</TooltipContent>
     </Tooltip>
   );
 }

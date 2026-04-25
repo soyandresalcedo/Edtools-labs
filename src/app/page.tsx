@@ -43,6 +43,9 @@ export default function Home() {
     voice,
     setVoice,
     voices,
+    enginePref,
+    setEnginePref,
+    elevenLabsStatus,
     ask,
     askLab,
     stop,
@@ -92,6 +95,9 @@ export default function Home() {
           voice={voice}
           setVoice={setVoice}
           voices={voices}
+          enginePref={enginePref}
+          setEnginePref={setEnginePref}
+          elevenLabsStatus={elevenLabsStatus}
           lang={lang}
           setLang={setLang}
           onAsk={handleAsk}
@@ -117,7 +123,7 @@ export default function Home() {
             variant="secondary"
             size="icon"
             onClick={() => setMobileOpen(true)}
-            aria-label="Open sidebar"
+            aria-label={lang === "es" ? "Abrir barra" : "Open sidebar"}
             className="shadow"
           >
             <Menu className="h-4 w-4" />
@@ -126,7 +132,7 @@ export default function Home() {
 
         {focusMode ? (
           <div className="hidden md:block">
-            <FocusOpenButton onOpen={() => setFocusMode(false)} />
+            <FocusOpenButton onOpen={() => setFocusMode(false)} lang={lang} />
           </div>
         ) : null}
 
@@ -143,9 +149,13 @@ export default function Home() {
 
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="w-[320px] p-0">
-          <SheetTitle className="sr-only">Edtools Labs agent</SheetTitle>
+          <SheetTitle className="sr-only">
+            {lang === "es" ? "Agente Edtools Labs" : "Edtools Labs agent"}
+          </SheetTitle>
           <SheetDescription className="sr-only">
-            Conversation, preset questions and input for the Edtools Labs tutor.
+            {lang === "es"
+              ? "Conversación, preguntas predefinidas y entrada para el tutor de Edtools Labs."
+              : "Conversation, preset questions and input for the Edtools Labs tutor."}
           </SheetDescription>
           <AgentSidebar
             status={status}
@@ -164,6 +174,9 @@ export default function Home() {
             voice={voice}
             setVoice={setVoice}
             voices={voices}
+            enginePref={enginePref}
+            setEnginePref={setEnginePref}
+            elevenLabsStatus={elevenLabsStatus}
             lang={lang}
             setLang={setLang}
             onAsk={handleAsk}
