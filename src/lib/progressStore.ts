@@ -10,8 +10,9 @@ export type TopicProgress = {
 export type LabProgressMap = Partial<Record<LabTopic, TopicProgress>>;
 
 export function readLabProgress(): LabProgressMap {
+  if (typeof window === "undefined") return {};
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = window.localStorage.getItem(KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
     if (parsed && typeof parsed === "object") return parsed as LabProgressMap;
@@ -32,7 +33,9 @@ export function incrementLabCompletion(topic: LabTopic): LabProgressMap {
     },
   };
   try {
-    localStorage.setItem(KEY, JSON.stringify(next));
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(KEY, JSON.stringify(next));
+    }
   } catch {
     // ignore
   }

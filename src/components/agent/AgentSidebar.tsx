@@ -34,7 +34,7 @@ import {
   type SpeechStatus,
 } from "@/lib/useSpeech";
 import type { AppLang } from "@/lib/lang";
-import { readLabProgress } from "@/lib/progressStore";
+import { readLabProgress, type LabProgressMap } from "@/lib/progressStore";
 import { LAB_TOPIC_VALUES } from "@/prompts/lab-recipes";
 
 const TOPIC_SHORT: Record<string, Record<AppLang, string>> = {
@@ -118,7 +118,10 @@ export function AgentSidebar({
   const isBusy =
     status === "thinking" || status === "speaking" || status === "drawing";
 
-  const [progressSnap, setProgressSnap] = useState(() => readLabProgress());
+  // Inicializar vacío para que el HTML del server y el primer render del cliente
+  // coincidan; leer localStorage solo después del mount evita hydration mismatch
+  // (React #418/#423) cuando el usuario tiene labs completados.
+  const [progressSnap, setProgressSnap] = useState<LabProgressMap>({});
   useEffect(() => {
     setProgressSnap(readLabProgress());
   }, [log]);
