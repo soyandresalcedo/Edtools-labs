@@ -43,6 +43,7 @@ import {
   type SessionToolUse,
   type SessionTurn,
 } from "@/lib/sessionTypes";
+import { isLikelyMode2Question } from "@/lib/modeTriggers";
 
 const STEP_DELAY_MS = 60;
 
@@ -63,12 +64,13 @@ export type LabSuggestionState =
   | "skipped";
 
 export type LogEntry =
-  | { role: "user"; text: string; ts: number }
-  | { role: "agent"; text: string; ts: number }
+  | { role: "user"; text: string; ts: number; seq: number }
+  | { role: "agent"; text: string; ts: number; seq: number }
   | {
       role: "lab_suggestion";
       id: string;
       ts: number;
+      seq: number;
       topic: LabTopic;
       reason: string;
       predict?: { question: string; options: string[] };
@@ -208,6 +210,20 @@ export function useLessonStream(): UseLessonStream {
   // `clear_canvas` o cuando el usuario pulsa "Nueva lección".
   const sceneRef = useRef<any[]>([]);
 
+  // Contador monotonico para ordenar entradas del log por intencion del
+  // modelo. `speak` se inserta cuando arranca el audio (callback `onStart`,
+  // detras de la cola TTS), pero `suggest_lab` se inserta de inmediato al
+  // recibir el SSE. Sin este `seq`, una `suggest_lab` emitida entre dos
+  // `speak` puede aparecer en pantalla ANTES de los speaks que el modelo
+  // emitio antes que ella. Con `seq` capturado al recibir el tool_call,
+  // `ConversationLog` puede ordenar de forma estable y reflejar la
+  // intencion del modelo, no el orden de inserciones efectivas.
+  const logSeqRef = useRef(0);
+  const nextLogSeq = useCallback(() => {
+    logSeqRef.current += 1;
+    return logSeqRef.current;
+  }, []);
+
   const [status, setStatus] = useState<AgentStatus>("idle");
   const [caption, setCaption] = useState("");
   const [log, setLog] = useState<LogEntry[]>([]);
@@ -296,6 +312,7 @@ export function useLessonStream(): UseLessonStream {
     setApiKeyHint(null);
     sessionTurnsRef.current = [];
     sceneRef.current = [];
+    logSeqRef.current = 0;
     setStatus("idle");
   }, [stop]);
 
@@ -320,6 +337,16 @@ export function useLessonStream(): UseLessonStream {
 
   type AskMode = "teach" | "lab";
 
+  // Opciones internas (no expuestas al consumidor) para controlar el flujo
+  // de auto-recuperacion: cuando el modelo respondio en MODE 2 sin emitir
+  // ningun `draw_*`, lanzamos UN retry con `suppressUserLog` para que el
+  // mensaje sintetico de continuacion no aparezca como un turno del alumno
+  // en el chat. `retryAttempt` corta cualquier potencial loop infinito.
+  type AskInternalOptions = {
+    retryAttempt?: number;
+    suppressUserLog?: boolean;
+  };
+
   const askInternalRef = useRef<
     | ((
         mode: AskMode,
@@ -329,6 +356,7 @@ export function useLessonStream(): UseLessonStream {
           sensorSummary?: string;
           predictionChoice?: string;
         },
+        options?: AskInternalOptions,
       ) => Promise<void>)
     | null
   >(null);
@@ -342,9 +370,12 @@ export function useLessonStream(): UseLessonStream {
         sensorSummary?: string;
         predictionChoice?: string;
       },
+      options?: AskInternalOptions,
     ) => {
       const trimmed = input.question.trim();
       if (!trimmed || isBusy) return;
+      const retryAttempt = options?.retryAttempt ?? 0;
+      const suppressUserLog = options?.suppressUserLog ?? false;
 
       labReturnContextRef.current = null;
       setShowLabReturn(false);
@@ -376,7 +407,12 @@ export function useLessonStream(): UseLessonStream {
             ? "Seguir después del lab"
             : "Continue after lab";
       }
-      setLog((prev) => [...prev, { role: "user", text: logUserText, ts: Date.now() }]);
+      if (!suppressUserLog) {
+        setLog((prev) => [
+          ...prev,
+          { role: "user", text: logUserText, ts: Date.now(), seq: nextLogSeq() },
+        ]);
+      }
 
       // CONVERSACIÓN MULTI-TURNO: el `scene` actual sobrevive entre `ask`s.
       // Solo se vacía cuando el modelo emite `clear_canvas` o cuando el
@@ -489,6 +525,12 @@ export function useLessonStream(): UseLessonStream {
               // dispara justo antes de que el audio empiece a sonar.
               speakCount++;
               if (mode === "lab") labAgentLines.push(text);
+              // Capturamos el `seq` AHORA (orden SSE), no en `onStart`. Si
+              // un `suggest_lab` llega entre este speak y el siguiente, su
+              // `seq` quedara mas alto que el de este speak y ConversationLog
+              // los rendera en orden correcto aunque el speak se inserte mas
+              // tarde (cuando arranque su audio).
+              const speakSeq = nextLogSeq();
               // Snapshot del worker de draws ANTES de encolar el speak: en él
               // están los dibujos asociados al speak anterior. `useSpeech`
               // hará `await` (con cap 1500ms) sobre este snapshot ANTES de
@@ -507,7 +549,7 @@ export function useLessonStream(): UseLessonStream {
                   setCaption(text);
                   setLog((prev) => [
                     ...prev,
-                    { role: "agent", text, ts: Date.now() },
+                    { role: "agent", text, ts: Date.now(), seq: speakSeq },
                   ]);
                 },
               });
@@ -534,12 +576,14 @@ export function useLessonStream(): UseLessonStream {
                 const initialState: LabSuggestionState = predict?.options?.length
                   ? "predicting"
                   : "pending";
+                const labSeq = nextLogSeq();
                 setLog((prev) => [
                   ...prev,
                   {
                     role: "lab_suggestion",
                     id,
                     ts: Date.now(),
+                    seq: labSeq,
                     topic,
                     reason,
                     predict,
@@ -739,15 +783,41 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
           }, 400);
         }
 
+        // Auto-recuperacion para MODE 2: si la pregunta del alumno tenia
+        // triggers de "explicame X" / "no entiendo X" / "show me X" pero
+        // el modelo respondio solo con `speak` (sin clear_canvas ni
+        // draw_*), reintentamos UNA vez con un mensaje sintetico que
+        // referencia el turno fallido (ya esta en `sessionTurnsRef`).
+        // No mostramos ese mensaje en el log para que el alumno no vea
+        // texto raro: solo ve aparecer el dibujo que faltaba.
+        //
+        // OJO: el retry NO se dispara aqui. Lo agendamos para DESPUES de
+        // `setStatus("done")` y de que el speech del turno actual termine,
+        // porque askInternal hace `if (isBusy) return;` al inicio. Si lo
+        // disparamos ahora, el audio del speak fallido sigue sonando,
+        // `isBusy === true`, y el retry se descarta silenciosamente.
+        let pendingMissedDrawsRetry = false;
         if (
           mode === "teach" &&
           drawToolCalls === 0 &&
           speakCount > 0 &&
           labSuggestCount === 0
         ) {
-          toast.warning("Nothing was drawn", {
-            description: "Rephrase the question to get a visual explanation.",
-          });
+          const shouldAutoRetry =
+            retryAttempt === 0 &&
+            !suppressUserLog &&
+            isLikelyMode2Question(trimmed, langRef.current);
+          if (shouldAutoRetry) {
+            pendingMissedDrawsRetry = true;
+            console.debug(
+              "[useLessonStream] will retry missing draws (MODE 2 trigger detected)",
+              { trimmed },
+            );
+          } else {
+            toast.warning("Nothing was drawn", {
+              description: "Rephrase the question to get a visual explanation.",
+            });
+          }
         }
 
         if (!controller.signal.aborted) {
@@ -777,6 +847,24 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
 
         setStatus("done");
         setTimeout(() => hidePen(), 1600);
+
+        // Disparar retry de "missed draws" ahora que `status === "done"` y
+        // el speech del turno fallido ya termino. askInternal hara `stop()`
+        // por defecto, lo cual no afecta porque ya no hay nada en cola.
+        if (pendingMissedDrawsRetry && !controller.signal.aborted) {
+          const L = langRef.current;
+          const recoveryQ =
+            L === "es"
+              ? "Tu última respuesta prometió mostrarme la gráfica/dibujo pero no dibujaste nada. Continúa AHORA con los draws que faltaron + un speak final socrático. NO repitas el saludo. NO uses clear_canvas si ya hay algo en pantalla."
+              : "Your last turn promised a drawing but emitted no draws. Continue NOW with the missing draws + a final Socratic speak. Do NOT greet again. Do NOT clear_canvas if anything is already on screen.";
+          window.setTimeout(() => {
+            void askInternalRef.current?.(
+              "teach",
+              { question: recoveryQ },
+              { retryAttempt: 1, suppressUserLog: true },
+            );
+          }, 250);
+        }
       } catch (err) {
         if ((err as any)?.name === "AbortError") {
           hidePen();
@@ -793,7 +881,7 @@ ${labAgentLines.map((l, i) => `${i + 1}. ${l}`).join("\n")}`;
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [hidePen, isBusy, speech, stop, unlockAudio],
+    [hidePen, isBusy, nextLogSeq, speech, stop, unlockAudio],
   );
 
   askInternalRef.current = askInternal;

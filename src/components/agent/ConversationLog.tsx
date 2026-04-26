@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import type { LogEntry } from "@/lib/useLessonStream";
@@ -42,11 +42,23 @@ export function ConversationLog({
 }) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  // Reorden estable por `seq` (asignado en `useLessonStream` al recibir el
+  // tool_call por SSE). Esto corrige el caso clasico: un `suggest_lab` se
+  // inserta al log instantaneamente, mientras que los `speak` se insertan
+  // cuando arranca su audio (callback `onStart`, detras de la cola TTS).
+  // Sin este sort, una `lab_suggestion` puede aparecer ANTES de los speaks
+  // que el modelo emitio antes que ella. `useMemo` evita rehacer el sort en
+  // cada render por igual referencia de `entries`.
+  const orderedEntries = useMemo(
+    () => [...entries].sort((a, b) => a.seq - b.seq),
+    [entries],
+  );
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [entries.length, currentCaption]);
+  }, [orderedEntries.length, currentCaption]);
 
-  if (entries.length === 0) {
+  if (orderedEntries.length === 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center px-6 text-center">
         <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-lg font-semibold text-primary">
@@ -66,7 +78,7 @@ export function ConversationLog({
   return (
     <ScrollArea className="h-full">
       <div className="flex flex-col gap-4 px-4 py-4">
-        {entries.map((entry, idx) => {
+        {orderedEntries.map((entry, idx) => {
           if (entry.role === "lab_suggestion") {
             return (
               <div key={entry.id} className="flex flex-col items-start">
@@ -76,7 +88,7 @@ export function ConversationLog({
                 <LabCard
                   entry={entry}
                   lang={lang}
-                  log={entries.slice(0, idx + 1)}
+                  log={orderedEntries.slice(0, idx + 1)}
                   status={agentStatus}
                   patchLabSuggestion={patchLabSuggestion}
                   askLab={askLab}
@@ -89,7 +101,7 @@ export function ConversationLog({
           const isLastAgent =
             isSpeaking &&
             entry.role === "agent" &&
-            idx === entries.length - 1 &&
+            idx === orderedEntries.length - 1 &&
             entry.text === currentCaption;
 
           return (
